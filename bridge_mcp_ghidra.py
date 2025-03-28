@@ -1,3 +1,10 @@
+# /// script
+# dependencies = [
+#   "requests<3",
+#   "mcp<2",
+# ]
+# ///
+
 from mcp.server.fastmcp import FastMCP
 import requests
 
