@@ -66,6 +66,7 @@ To set up Claude Desktop as a Ghidra MCP client, go to `Claude` -> `Settings` ->
 ```
 
 Alternatively, edit this file directly:
+
 ```
 /Users/YOUR_USER/Library/Application Support/Claude/claude_desktop_config.json
 ```
@@ -87,3 +88,9 @@ The generated zip file includes the built Ghidra plugin and its resources. These
 - lib/GhidraMCP.jar
 - extensions.properties
 - Module.manifest
+
+# Configuration
+
+Specify the `GHIDRA_SERVER_URL` to configure what Ghidra instance is controlled by this plugin.
+
+Defaults to `http://localhost:8080`
