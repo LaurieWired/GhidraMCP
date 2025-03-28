@@ -91,6 +91,24 @@ The generated zip file includes the built Ghidra plugin and its resources. These
 
 # Configuration
 
-Specify the `GHIDRA_SERVER_URL` to configure what Ghidra instance is controlled by this plugin.
+Specify the `GHIDRA_SERVER_URL` environment variable to configure what Ghidra instance is controlled by this MCP server, otherwise the server defaults to `http://localhost:8080`
 
-Defaults to `http://localhost:8080`
+You can include environment variables in the MCP config json like so:
+
+
+```json
+{
+  "mcpServers": {
+    "ghidra": {
+      "command": "python",
+      "args": [
+        "/ABSOLUTE_PATH_TO/bridge_mcp_ghidra.py"
+      ],
+      "env": {
+        "GHIDRA_SERVER_URL": "https://your-ghidra-url/"
+      }
+    }
+  }
+}
+```
+
