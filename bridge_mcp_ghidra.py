@@ -1,7 +1,8 @@
 from mcp.server.fastmcp import FastMCP
 import requests
+import os
 
-ghidra_server_url = "http://localhost:8080"
+ghidra_server_url = os.getenv("GHIDRA_SERVER_URL", "http://localhost:8080")
 
 mcp = FastMCP("ghidra-mcp")
 
