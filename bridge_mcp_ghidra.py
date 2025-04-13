@@ -8,6 +8,7 @@
 
 import sys
 import requests
+from urllib.parse import urljoin
 
 from mcp.server.fastmcp import FastMCP
 
@@ -23,7 +24,7 @@ def safe_get(endpoint: str, params: dict = None) -> list:
     if params is None:
         params = {}
 
-    url = f"{ghidra_server_url}/{endpoint}"
+    url =  urljoin(ghidra_server_url, endpoint)
 
     try:
         response = requests.get(url, params=params, timeout=5)
@@ -38,9 +39,9 @@ def safe_get(endpoint: str, params: dict = None) -> list:
 def safe_post(endpoint: str, data: dict | str) -> str:
     try:
         if isinstance(data, dict):
-            response = requests.post(f"{ghidra_server_url}/{endpoint}", data=data, timeout=5)
+            response = requests.post( urljoin(ghidra_server_url, endpoint), data=data, timeout=5)
         else:
-            response = requests.post(f"{ghidra_server_url}/{endpoint}", data=data.encode("utf-8"), timeout=5)
+            response = requests.post( urljoin(ghidra_server_url, endpoint), data=data.encode("utf-8"), timeout=5)
         response.encoding = 'utf-8'
         if response.ok:
             return response.text.strip()
