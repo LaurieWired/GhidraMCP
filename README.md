@@ -99,7 +99,15 @@ Another MCP client that supports multiple models on the backend is [5ire](https:
 3. Command: `python /ABSOLUTE_PATH_TO/bridge_mcp_ghidra.py`
 
 # Building from Source
-Build with Maven by running:
+1. Copy the following files from your Ghidra directory to this project's `lib/` directory:
+- `Ghidra/Features/Base/lib/Base.jar`
+- `Ghidra/Features/Decompiler/lib/Decompiler.jar`
+- `Ghidra/Framework/Docking/lib/Docking.jar`
+- `Ghidra/Framework/Generic/lib/Generic.jar`
+- `Ghidra/Framework/Project/lib/Project.jar`
+- `Ghidra/Framework/SoftwareModeling/lib/SoftwareModeling.jar`
+- `Ghidra/Framework/Utility/lib/Utility.jar`
+2. Build with Maven by running:
 
 `mvn clean package assembly:single`
 
