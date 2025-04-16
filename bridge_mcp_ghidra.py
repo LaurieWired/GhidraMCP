@@ -222,6 +222,69 @@ def set_local_variable_type(function_address: str, variable_name: str, new_type:
     """
     return safe_post("set_local_variable_type", {"function_address": function_address, "variable_name": variable_name, "new_type": new_type})
 
+@mcp.tool()
+def get_xrefs_to(address: str, offset: int = 0, limit: int = 100) -> list:
+    """
+    Get all references to the specified address (xref to).
+    
+    Args:
+        address: Target address in hex format (e.g. "0x1400010a0")
+        offset: Pagination offset (default: 0)
+        limit: Maximum number of references to return (default: 100)
+        
+    Returns:
+        List of references to the specified address
+    """
+    return safe_get("xrefs_to", {"address": address, "offset": offset, "limit": limit})
+
+@mcp.tool()
+def get_xrefs_from(address: str, offset: int = 0, limit: int = 100) -> list:
+    """
+    Get all references from the specified address (xref from).
+    
+    Args:
+        address: Source address in hex format (e.g. "0x1400010a0")
+        offset: Pagination offset (default: 0)
+        limit: Maximum number of references to return (default: 100)
+        
+    Returns:
+        List of references from the specified address
+    """
+    return safe_get("xrefs_from", {"address": address, "offset": offset, "limit": limit})
+
+@mcp.tool()
+def get_function_xrefs(name: str, offset: int = 0, limit: int = 100) -> list:
+    """
+    Get all references to the specified function by name.
+    
+    Args:
+        name: Function name to search for
+        offset: Pagination offset (default: 0)
+        limit: Maximum number of references to return (default: 100)
+        
+    Returns:
+        List of references to the specified function
+    """
+    return safe_get("function_xrefs", {"name": name, "offset": offset, "limit": limit})
+
+@mcp.tool()
+def list_strings(offset: int = 0, limit: int = 2000, filter: str = None) -> list:
+    """
+    List all defined strings in the program with their addresses.
+    
+    Args:
+        offset: Pagination offset (default: 0)
+        limit: Maximum number of strings to return (default: 2000)
+        filter: Optional filter to match within string content
+        
+    Returns:
+        List of strings with their addresses
+    """
+    params = {"offset": offset, "limit": limit}
+    if filter:
+        params["filter"] = filter
+    return safe_get("strings", params)
+
 def main():
     parser = argparse.ArgumentParser(description="MCP server for Ghidra")
     parser.add_argument("--ghidra-server", type=str, default=DEFAULT_GHIDRA_SERVER,

@@ -7,6 +7,10 @@ import ghidra.program.model.address.GlobalNamespace;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.symbol.*;
+import ghidra.program.model.symbol.ReferenceManager;
+import ghidra.program.model.symbol.Reference;
+import ghidra.program.model.symbol.ReferenceIterator;
+import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.pcode.HighFunction;
 import ghidra.program.model.pcode.HighSymbol;
 import ghidra.program.model.pcode.LocalSymbolMap;
@@ -303,6 +307,38 @@ public class GhidraMCPPlugin extends Plugin {
             responseMsg.append("\nResult: ").append(successMsg);
 
             sendResponse(exchange, responseMsg.toString());
+        });
+
+        server.createContext("/xrefs_to", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            int offset = parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = parseIntOrDefault(qparams.get("limit"), 100);
+            sendResponse(exchange, getXrefsTo(address, offset, limit));
+        });
+
+        server.createContext("/xrefs_from", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            int offset = parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = parseIntOrDefault(qparams.get("limit"), 100);
+            sendResponse(exchange, getXrefsFrom(address, offset, limit));
+        });
+
+        server.createContext("/function_xrefs", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String name = qparams.get("name");
+            int offset = parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = parseIntOrDefault(qparams.get("limit"), 100);
+            sendResponse(exchange, getFunctionXrefs(name, offset, limit));
+        });
+
+        server.createContext("/strings", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            int offset = parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = parseIntOrDefault(qparams.get("limit"), 100);
+            String filter = qparams.get("filter");
+            sendResponse(exchange, listDefinedStrings(offset, limit, filter));
         });
 
         server.setExecutor(null);
@@ -1204,6 +1240,177 @@ public class GhidraMCPPlugin extends Plugin {
         } finally {
             program.endTransaction(tx, success.get());
         }
+    }
+
+    /**
+     * Get all references to a specific address (xref to)
+     */
+    private String getXrefsTo(String addressStr, int offset, int limit) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+
+        try {
+            Address addr = program.getAddressFactory().getAddress(addressStr);
+            ReferenceManager refManager = program.getReferenceManager();
+            
+            ReferenceIterator refIter = refManager.getReferencesTo(addr);
+            
+            List<String> refs = new ArrayList<>();
+            while (refIter.hasNext()) {
+                Reference ref = refIter.next();
+                Address fromAddr = ref.getFromAddress();
+                RefType refType = ref.getReferenceType();
+                
+                Function fromFunc = program.getFunctionManager().getFunctionContaining(fromAddr);
+                String funcInfo = (fromFunc != null) ? " in " + fromFunc.getName() : "";
+                
+                refs.add(String.format("From %s%s [%s]", fromAddr, funcInfo, refType.getName()));
+            }
+            
+            return paginateList(refs, offset, limit);
+        } catch (Exception e) {
+            return "Error getting references to address: " + e.getMessage();
+        }
+    }
+
+    /**
+     * Get all references from a specific address (xref from)
+     */
+    private String getXrefsFrom(String addressStr, int offset, int limit) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+
+        try {
+            Address addr = program.getAddressFactory().getAddress(addressStr);
+            ReferenceManager refManager = program.getReferenceManager();
+            
+            Reference[] references = refManager.getReferencesFrom(addr);
+            
+            List<String> refs = new ArrayList<>();
+            for (Reference ref : references) {
+                Address toAddr = ref.getToAddress();
+                RefType refType = ref.getReferenceType();
+                
+                String targetInfo = "";
+                Function toFunc = program.getFunctionManager().getFunctionAt(toAddr);
+                if (toFunc != null) {
+                    targetInfo = " to function " + toFunc.getName();
+                } else {
+                    Data data = program.getListing().getDataAt(toAddr);
+                    if (data != null) {
+                        targetInfo = " to data " + (data.getLabel() != null ? data.getLabel() : data.getPathName());
+                    }
+                }
+                
+                refs.add(String.format("To %s%s [%s]", toAddr, targetInfo, refType.getName()));
+            }
+            
+            return paginateList(refs, offset, limit);
+        } catch (Exception e) {
+            return "Error getting references from address: " + e.getMessage();
+        }
+    }
+
+    /**
+     * Get all references to a specific function by name
+     */
+    private String getFunctionXrefs(String functionName, int offset, int limit) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (functionName == null || functionName.isEmpty()) return "Function name is required";
+
+        try {
+            List<String> refs = new ArrayList<>();
+            FunctionManager funcManager = program.getFunctionManager();
+            for (Function function : funcManager.getFunctions(true)) {
+                if (function.getName().equals(functionName)) {
+                    Address entryPoint = function.getEntryPoint();
+                    ReferenceIterator refIter = program.getReferenceManager().getReferencesTo(entryPoint);
+                    
+                    while (refIter.hasNext()) {
+                        Reference ref = refIter.next();
+                        Address fromAddr = ref.getFromAddress();
+                        RefType refType = ref.getReferenceType();
+                        
+                        Function fromFunc = funcManager.getFunctionContaining(fromAddr);
+                        String funcInfo = (fromFunc != null) ? " in " + fromFunc.getName() : "";
+                        
+                        refs.add(String.format("From %s%s [%s]", fromAddr, funcInfo, refType.getName()));
+                    }
+                }
+            }
+            
+            if (refs.isEmpty()) {
+                return "No references found to function: " + functionName;
+            }
+            
+            return paginateList(refs, offset, limit);
+        } catch (Exception e) {
+            return "Error getting function references: " + e.getMessage();
+        }
+    }
+
+/**
+ * List all defined strings in the program with their addresses
+ */
+    private String listDefinedStrings(int offset, int limit, String filter) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        List<String> lines = new ArrayList<>();
+        DataIterator dataIt = program.getListing().getDefinedData(true);
+        
+        while (dataIt.hasNext()) {
+            Data data = dataIt.next();
+            
+            if (data != null && isStringData(data)) {
+                String value = data.getValue() != null ? data.getValue().toString() : "";
+                
+                if (filter == null || value.toLowerCase().contains(filter.toLowerCase())) {
+                    String escapedValue = escapeString(value);
+                    lines.add(String.format("%s: \"%s\"", data.getAddress(), escapedValue));
+                }
+            }
+        }
+        
+        return paginateList(lines, offset, limit);
+    }
+
+    /**
+     * Check if the given data is a string type
+     */
+    private boolean isStringData(Data data) {
+        if (data == null) return false;
+        
+        DataType dt = data.getDataType();
+        String typeName = dt.getName().toLowerCase();
+        return typeName.contains("string") || typeName.contains("char") || typeName.equals("unicode");
+    }
+
+    /**
+     * Escape special characters in a string for display
+     */
+    private String escapeString(String input) {
+        if (input == null) return "";
+        
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < input.length(); i++) {
+            char c = input.charAt(i);
+            if (c >= 32 && c < 127) {
+                sb.append(c);
+            } else if (c == '\n') {
+                sb.append("\\n");
+            } else if (c == '\r') {
+                sb.append("\\r");
+            } else if (c == '\t') {
+                sb.append("\\t");
+            } else {
+                sb.append(String.format("\\x%02x", (int)c & 0xFF));
+            }
+        }
+        return sb.toString();
     }
 
     /**
