@@ -99,7 +99,7 @@ Another MCP client that supports multiple models on the backend is [5ire](https:
 3. Command: `python /ABSOLUTE_PATH_TO/bridge_mcp_ghidra.py`
 
 ## Example 4: VSCode (GitHub Copilot)
-GitHub Copilot's agent mode can connect to MCP servers over both stdio and sse. To set up GhidraMCP as a "tool" in VSCode's Copilot chat, you need to first make sure you are in "Agent" mode. Then, click on the gears icon in the chat box:
+GitHub Copilot's agent mode can connect to MCP servers over both stdio and sse. To set up GhidraMCP as a "tool" in VSCode's Copilot chat, you need to first make sure you are in "Agent" mode. Then, click on the tools icon in the chat box:
 
 ![image](https://github.com/user-attachments/assets/096c9639-c0f3-4217-bdab-f2a0f364ac9c)
 
