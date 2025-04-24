@@ -15,58 +15,64 @@
     <dependency>
       <groupId>ghidra</groupId>
       <artifactId>Generic</artifactId>
-      <version>11.3.1</version>
+      <version>11.3.2</version>
       <scope>system</scope>
       <systemPath>${project.basedir}/lib/Generic.jar</systemPath>
     </dependency>
     <dependency>
       <groupId>ghidra</groupId>
       <artifactId>SoftwareModeling</artifactId>
-      <version>11.3.1</version>
+      <version>11.3.2</version>
       <scope>system</scope>
       <systemPath>${project.basedir}/lib/SoftwareModeling.jar</systemPath>
     </dependency>
     <dependency>
       <groupId>ghidra</groupId>
       <artifactId>Project</artifactId>
-      <version>11.3.1</version>
+      <version>11.3.2</version>
       <scope>system</scope>
       <systemPath>${project.basedir}/lib/Project.jar</systemPath>
     </dependency>
     <dependency>
       <groupId>ghidra</groupId>
       <artifactId>Docking</artifactId>
-      <version>11.3.1</version>
+      <version>11.3.2</version>
       <scope>system</scope>
       <systemPath>${project.basedir}/lib/Docking.jar</systemPath>
     </dependency>
     <dependency>
       <groupId>ghidra</groupId>
       <artifactId>Decompiler</artifactId>
-      <version>11.3.1</version>
+      <version>11.3.2</version>
       <scope>system</scope>
       <systemPath>${project.basedir}/lib/Decompiler.jar</systemPath>
     </dependency>
     <dependency>
       <groupId>ghidra</groupId>
       <artifactId>Utility</artifactId>
-      <version>11.3.1</version>
+      <version>11.3.2</version>
       <scope>system</scope>
       <systemPath>${project.basedir}/lib/Utility.jar</systemPath>
     </dependency>
     <dependency>
       <groupId>ghidra</groupId>
       <artifactId>Base</artifactId>
-      <version>11.3.1</version>
+      <version>11.3.2</version>
       <scope>system</scope>
       <systemPath>${project.basedir}/lib/Base.jar</systemPath>
     </dependency>
     <dependency>
       <groupId>ghidra</groupId>
       <artifactId>Gui</artifactId>
-      <version>11.3.1</version>
+      <version>11.3.2</version>
       <scope>system</scope>
       <systemPath>${project.basedir}/lib/Gui.jar</systemPath>
+    </dependency>
+
+    <dependency>
+      <groupId>org.reflections</groupId>
+      <artifactId>reflections</artifactId>
+      <version>0.10.2</version>
     </dependency>
 
     <!-- JUnit (test only) -->
@@ -78,27 +84,40 @@
     </dependency>
   </dependencies>
 
+  <properties>
+    <maven.compiler.source>21</maven.compiler.source>
+    <maven.compiler.target>21</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
   <build>
     <plugins>
       <!-- Use custom MANIFEST.MF -->
       <plugin>
-        <artifactId>maven-jar-plugin</artifactId>
-        <version>3.2.2</version>
-        <configuration>
-          <archive>
-            <manifestFile>src/main/resources/META-INF/MANIFEST.MF</manifestFile>
-          </archive>
-          <!-- Set a fixed name for the JAR without version -->
-          <finalName>GhidraMCP</finalName>
-          <!-- Exclude the App class -->
-          <excludes>
-            <exclude>**/App.class</exclude>
-          </excludes>
-          <!-- Make sure output directory is target for consistency -->
-          <outputDirectory>${project.build.directory}</outputDirectory>
-        </configuration>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.5.0</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <finalName>GhidraMCP</finalName>
+
+              <!-- Only excludes Ghidra jars -->
+              <artifactSet>
+                <excludes>
+                  <exclude>ghidra:*</exclude>
+                </excludes>
+              </artifactSet>
+            </configuration>
+          </execution>
+        </executions>
       </plugin>
-      
+
+
       <!-- The Assembly Plugin for creating the Ghidra extension ZIP -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
@@ -127,25 +146,15 @@
           </execution>
         </executions>
       </plugin>
-      
-      <!-- Copy dependencies to target/lib for the assembly -->
+
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-dependency-plugin</artifactId>
-        <version>3.1.2</version>
-        <executions>
-          <execution>
-            <id>copy-dependencies</id>
-            <phase>prepare-package</phase>
-            <goals>
-              <goal>copy-dependencies</goal>
-            </goals>
-            <configuration>
-              <outputDirectory>${project.build.directory}/lib</outputDirectory>
-              <includeScope>runtime</includeScope>
-            </configuration>
-          </execution>
-        </executions>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.1</version>
+        <configuration>
+          <source>21</source>
+          <target>21</target>
+        </configuration>
       </plugin>
     </plugins>
   </build>
