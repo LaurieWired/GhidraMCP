@@ -23,6 +23,14 @@ MCP Server + Ghidra Plugin
 
 # Installation
 
+### Installing via Smithery
+
+To install GhidraMCP for Claude Desktop automatically via [Smithery](https://smithery.ai/server/@LaurieWired/GhidraMCP):
+
+```bash
+npx -y @smithery/cli install @LaurieWired/GhidraMCP --client claude
+```
+
 ## Prerequisites
 - Install [Ghidra](https://ghidra-sre.org)
 - Python3
