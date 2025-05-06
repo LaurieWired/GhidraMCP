@@ -1,0 +1,55 @@
+# Smithery configuration file: https://smithery.ai/docs/build/project-config
+
+startCommand:
+  type: stdio
+  configSchema:
+    # JSON Schema defining the configuration options for the MCP.
+    type: object
+    required: []
+    properties:
+      ghidraServer:
+        type: string
+        default: http://127.0.0.1:8080/
+        description: URL of the Ghidra HTTP server
+      transport:
+        type: string
+        default: stdio
+        description: Transport protocol for MCP
+      mcpHost:
+        type: string
+        default: 127.0.0.1
+        description: Host for SSE transport
+      mcpPort:
+        type: number
+        default: 8081
+        description: Port for SSE transport
+  commandFunction:
+    # A JS function that produces the CLI command based on the given config to start the MCP on stdio.
+    |-
+    (config) => {
+      const args = [];
+      if (config.ghidraServer) {
+        args.push("--ghidra-server", config.ghidraServer);
+      }
+      if (config.transport) {
+        args.push("--transport", config.transport);
+      }
+      if (config.transport === "sse") {
+        if (config.mcpHost) {
+          args.push("--mcp-host", config.mcpHost);
+        }
+        if (config.mcpPort !== undefined) {
+          args.push("--mcp-port", String(config.mcpPort));
+        }
+      }
+      return {
+        command: "python",
+        args: ["bridge_mcp_ghidra.py", ...args],
+        env: {}
+      };
+    }
+  exampleConfig:
+    ghidraServer: http://127.0.0.1:8080/
+    transport: stdio
+    mcpHost: 127.0.0.1
+    mcpPort: 8081
