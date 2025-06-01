@@ -17,6 +17,7 @@ import ghidra.program.model.pcode.LocalSymbolMap;
 import ghidra.program.model.pcode.HighFunctionDBUtil;
 import ghidra.program.model.pcode.HighFunctionDBUtil.ReturnCommitOption;
 import ghidra.app.decompiler.DecompInterface;
+import ghidra.app.decompiler.DecompileOptions;
 import ghidra.app.decompiler.DecompileResults;
 import ghidra.app.plugin.PluginCategoryNames;
 import ghidra.app.services.CodeViewerService;
@@ -494,6 +495,9 @@ public class GhidraMCPPlugin extends Plugin {
         Program program = getCurrentProgram();
         if (program == null) return "No program loaded";
         DecompInterface decomp = new DecompInterface();
+        DecompileOptions options = new DecompileOptions();
+        options.setRespectReadOnly(true);
+        decomp.setOptions(options);
         decomp.openProgram(program);
         for (Function func : program.getFunctionManager().getFunctions(true)) {
             if (func.getName().equals(name)) {
