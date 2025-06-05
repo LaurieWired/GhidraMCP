@@ -287,6 +287,34 @@ def list_strings(offset: int = 0, limit: int = 2000, filter: str = None) -> list
         params["filter"] = filter
     return safe_get("strings", params)
 
+@mcp.tool()
+def read_bytes(address: str, length: int = 32) -> str:
+    """
+    Read raw bytes from memory at the given address.
+
+    Args:
+        address: Starting address in hex (e.g. "0x00401000")
+        length: Number of bytes to read (default: 32)
+
+    Returns:
+        Hex string of the bytes, space-separated (e.g. "55 8b ec ...")
+    """
+    return safe_get("read_bytes", {"address": address, "length": length})
+
+@mcp.tool()
+def write_bytes(address: str, bytes_hex: str) -> str:
+    """
+    Scrive una sequenza di byte all'indirizzo specificato nella memoria del programma.
+
+    Args:
+        address: Indirizzo di destinazione (es. "0x140001000")
+        bytes_hex: Sequenza di byte separati da spazi in formato esadecimale (es. "90 90 90 90")
+
+    Returns:
+        Risultato dell'operazione (es. "Bytes written successfully" oppure errore dettagliato)
+    """
+    return safe_post("write_bytes", {"address": address, "bytes": bytes_hex})
+
 def main():
     parser = argparse.ArgumentParser(description="MCP server for Ghidra")
     parser.add_argument("--ghidra-server", type=str, default=DEFAULT_GHIDRA_SERVER,

@@ -7,10 +7,6 @@ import ghidra.program.model.address.GlobalNamespace;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.symbol.*;
-import ghidra.program.model.symbol.ReferenceManager;
-import ghidra.program.model.symbol.Reference;
-import ghidra.program.model.symbol.ReferenceIterator;
-import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.pcode.HighFunction;
 import ghidra.program.model.pcode.HighSymbol;
 import ghidra.program.model.pcode.LocalSymbolMap;
@@ -23,9 +19,6 @@ import ghidra.app.services.CodeViewerService;
 import ghidra.app.services.ProgramManager;
 import ghidra.app.util.PseudoDisassembler;
 import ghidra.app.cmd.function.SetVariableNameCmd;
-import ghidra.program.model.symbol.SourceType;
-import ghidra.program.model.listing.LocalVariableImpl;
-import ghidra.program.model.listing.ParameterImpl;
 import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.exception.InvalidInputException;
 import ghidra.framework.plugintool.PluginInfo;
@@ -40,10 +33,12 @@ import ghidra.program.model.data.DataType;
 import ghidra.program.model.data.DataTypeManager;
 import ghidra.program.model.data.PointerDataType;
 import ghidra.program.model.data.Undefined1DataType;
-import ghidra.program.model.listing.Variable;
 import ghidra.app.decompiler.component.DecompilerUtils;
 import ghidra.app.decompiler.ClangToken;
 import ghidra.framework.options.Options;
+
+import ghidra.program.model.mem.Memory;
+import ghidra.program.model.mem.MemoryAccessException;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -339,6 +334,109 @@ public class GhidraMCPPlugin extends Plugin {
             int limit = parseIntOrDefault(qparams.get("limit"), 100);
             String filter = qparams.get("filter");
             sendResponse(exchange, listDefinedStrings(offset, limit, filter));
+        });
+
+        server.createContext("/read_bytes", exchange -> {
+            if (!exchange.getRequestMethod().equalsIgnoreCase("GET")) {
+                sendResponse(exchange, "Method Not Allowed", 405);
+                return;
+            }
+
+            Map<String, String> queryParams = parseQueryParams(exchange);
+            String addressStr = queryParams.get("address");
+            String lengthStr = queryParams.getOrDefault("length", "32");
+
+            if (addressStr == null) {
+                sendResponse(exchange, "Missing 'address' parameter", 400);
+                return;
+            }
+
+            Program currentProgram = getCurrentProgram();
+            if (currentProgram == null) {
+                sendResponse(exchange, "No active program", 500);
+                return;
+            }
+
+            try {
+                Address address = currentProgram.getAddressFactory().getAddress(addressStr);
+                int length = Integer.parseInt(lengthStr);
+
+                Memory memory = currentProgram.getMemory();
+                byte[] bytes = new byte[length];
+                memory.getBytes(address, bytes);
+
+                StringBuilder sb = new StringBuilder();
+                for (byte b : bytes) {
+                    sb.append(String.format("%02x ", b));
+                }
+
+                sendResponse(exchange, sb.toString().trim());
+            } catch (MemoryAccessException e) {
+                sendResponse(exchange, "Memory access error: " + e.getMessage(), 500);
+            } catch (Exception e) {
+                sendResponse(exchange, "Error: " + e.getMessage(), 500);
+            }
+        });
+
+        server.createContext("/write_bytes", exchange -> {
+            if (!exchange.getRequestMethod().equalsIgnoreCase("POST")) {
+                sendResponse(exchange, "Method Not Allowed", 405);
+                return;
+            }
+
+            Map<String, String> params = parsePostParams(exchange);
+            String addressStr = params.get("address");
+            String bytesStr = params.get("bytes");
+
+            if (addressStr == null || bytesStr == null) {
+               sendResponse(exchange, "Missing 'address' or 'bytes' parameter", 400);
+               return;
+            }
+
+            Program currentProgram = getCurrentProgram();
+            if (currentProgram == null) {
+                sendResponse(exchange, "No active program", 500);
+                return;
+            }
+
+            try {
+                Address address = currentProgram.getAddressFactory().getAddress(addressStr);
+                Memory memory = currentProgram.getMemory();
+
+                String[] byteTokens = bytesStr.trim().split("\\s+");
+                byte[] newBytes = new byte[byteTokens.length];
+                for (int i = 0; i < byteTokens.length; i++) {
+                    newBytes[i] = (byte) Integer.parseInt(byteTokens[i], 16);
+                }
+
+                Address endAddress = address.add(newBytes.length - 1);
+
+                if (!memory.contains(address) || !memory.contains(endAddress)) {
+                    sendResponse(exchange, "Memory range out of bounds or unmapped", 400);
+                    return;
+                }
+
+                byte[] existingBytes = new byte[newBytes.length];
+                int bytesRead = memory.getBytes(address, existingBytes);
+                if (bytesRead != newBytes.length) {
+                    sendResponse(exchange, "Mismatch: memory region size differs from replacement size", 400);
+                    return;
+                }
+
+                int txId = currentProgram.startTransaction("Write Bytes");
+                boolean success = false;
+                try {
+                    currentProgram.getListing().clearCodeUnits(address, endAddress, false);
+                    memory.setBytes(address, newBytes);
+                    success = true;
+                } finally {
+                    currentProgram.endTransaction(txId, success);
+                }
+
+                sendResponse(exchange, "Bytes written successfully");
+            } catch (Exception e) {
+                sendResponse(exchange, "Error: " + e.getMessage(), 500);
+            }
         });
 
         server.setExecutor(null);
@@ -1633,6 +1731,14 @@ public class GhidraMCPPlugin extends Plugin {
         byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
         exchange.sendResponseHeaders(200, bytes.length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(bytes);
+        }
+    }
+
+    private void sendResponse(HttpExchange exchange, String response, int statusCode) throws IOException {
+        byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
+        exchange.sendResponseHeaders(statusCode, bytes.length);
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);
         }
