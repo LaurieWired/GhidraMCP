@@ -17,6 +17,7 @@ import ghidra.app.decompiler.DecompileResults;
 import ghidra.app.plugin.PluginCategoryNames;
 import ghidra.app.services.CodeViewerService;
 import ghidra.app.services.ProgramManager;
+import ghidra.program.disassemble.Disassembler;
 import ghidra.app.util.PseudoDisassembler;
 import ghidra.app.cmd.function.SetVariableNameCmd;
 import ghidra.util.exception.DuplicateNameException;
@@ -428,6 +429,8 @@ public class GhidraMCPPlugin extends Plugin {
                 try {
                     currentProgram.getListing().clearCodeUnits(address, endAddress, false);
                     memory.setBytes(address, newBytes);
+                    Disassembler disassembler = Disassembler.getDisassembler(currentProgram, TaskMonitor.DUMMY, null);
+                    disassembler.disassemble(address, null);
                     success = true;
                 } finally {
                     currentProgram.endTransaction(txId, success);
