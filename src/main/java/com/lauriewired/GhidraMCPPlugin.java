@@ -69,6 +69,8 @@ public class GhidraMCPPlugin extends Plugin {
 
     private HttpServer server;
     private static final String OPTION_CATEGORY_NAME = "GhidraMCP HTTP Server";
+    private static final String ADDRESS_OPTION_NAME = "Server Address";
+    private static final String DEFAULT_ADDRESS = "127.0.0.1";
     private static final String PORT_OPTION_NAME = "Server Port";
     private static final int DEFAULT_PORT = 8080;
 
@@ -78,6 +80,10 @@ public class GhidraMCPPlugin extends Plugin {
 
         // Register the configuration option
         Options options = tool.getOptions(OPTION_CATEGORY_NAME);
+        options.registerOption(ADDRESS_OPTION_NAME, DEFAULT_ADDRESS,
+            null, // No help location for now
+            "The network address the embedded HTTP server will listen on. " +
+            "Requires Ghidra restart or plugin reload to take effect after changing.");
         options.registerOption(PORT_OPTION_NAME, DEFAULT_PORT,
             null, // No help location for now
             "The network port number the embedded HTTP server will listen on. " +
@@ -95,6 +101,7 @@ public class GhidraMCPPlugin extends Plugin {
     private void startServer() throws IOException {
         // Read the configured port
         Options options = tool.getOptions(OPTION_CATEGORY_NAME);
+        String listenAddress = options.getString(ADDRESS_OPTION_NAME, DEFAULT_ADDRESS);
         int port = options.getInt(PORT_OPTION_NAME, DEFAULT_PORT);
 
         // Stop existing server if running (e.g., if plugin is reloaded)
@@ -104,7 +111,14 @@ public class GhidraMCPPlugin extends Plugin {
             server = null;
         }
 
-        server = HttpServer.create(new InetSocketAddress(port), 0);
+        InetSocketAddress inetAddress = new InetSocketAddress(listenAddress, port);
+
+        if (inetAddress.isUnresolved()) {
+            Msg.error(this, "Failed to resolve listen address.");
+            return;
+        }
+
+        server = HttpServer.create(inetAddress, 0);
 
         // Each listing endpoint uses offset & limit from query params:
         server.createContext("/methods", exchange -> {
