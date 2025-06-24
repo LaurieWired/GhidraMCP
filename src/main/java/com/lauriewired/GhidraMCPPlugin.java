@@ -34,6 +34,7 @@ import ghidra.program.util.ProgramLocation;
 import ghidra.util.Msg;
 import ghidra.util.task.ConsoleTaskMonitor;
 import ghidra.util.task.TaskMonitor;
+import ghidra.util.task.TaskMonitorAdapter;
 import ghidra.program.model.pcode.HighVariable;
 import ghidra.program.model.pcode.Varnode;
 import ghidra.program.model.data.DataType;
@@ -41,6 +42,7 @@ import ghidra.program.model.data.DataTypeManager;
 import ghidra.program.model.data.PointerDataType;
 import ghidra.program.model.data.Undefined1DataType;
 import ghidra.program.model.listing.Variable;
+import ghidra.program.model.mem.Memory; 
 import ghidra.app.decompiler.component.DecompilerUtils;
 import ghidra.app.decompiler.ClangToken;
 import ghidra.framework.options.Options;
@@ -339,6 +341,27 @@ public class GhidraMCPPlugin extends Plugin {
             int limit = parseIntOrDefault(qparams.get("limit"), 100);
             String filter = qparams.get("filter");
             sendResponse(exchange, listDefinedStrings(offset, limit, filter));
+        });
+
+        server.createContext("/get_data_by_label", exchange -> {
+            Map<String,String> q = parseQueryParams(exchange);
+            String label = q.get("label");
+            sendResponse(exchange, getDataByLabel(label));
+        });
+
+        server.createContext("/get_bytes", exchange -> {
+            Map<String,String> q = parseQueryParams(exchange);
+            String addrStr = q.get("address");
+            int size = parseIntOrDefault(q.get("size"), 1);
+            sendResponse(exchange, getBytes(addrStr, size));
+        });
+
+        server.createContext("/search_bytes", exchange -> {
+            Map<String,String> q = parseQueryParams(exchange);
+            String bytesHex = q.get("bytes");
+            int offset = parseIntOrDefault(q.get("offset"), 0);
+            int limit  = parseIntOrDefault(q.get("limit"), 100);
+            sendResponse(exchange, searchBytes(bytesHex, offset, limit));
         });
 
         server.setExecutor(null);
@@ -1411,6 +1434,93 @@ public class GhidraMCPPlugin extends Plugin {
             }
         }
         return sb.toString();
+    }
+
+    /** Retrieve address and data value by specifying a label name */
+    private String getDataByLabel(String label) {
+        Program program = getCurrentProgram();
+        if (program == null)      return "No program loaded";
+        if (label == null || label.isEmpty()) return "Label is required";
+
+        SymbolTable st = program.getSymbolTable();
+        SymbolIterator it = st.getSymbols(label);
+        if (!it.hasNext()) return "Label not found: " + label;
+
+        StringBuilder sb = new StringBuilder();
+        while (it.hasNext()) {
+            Symbol s = it.next();
+            Address a = s.getAddress();
+            Data d    = program.getListing().getDefinedDataAt(a);
+            String v  = (d != null) ? escapeString(String.valueOf(d.getDefaultValueRepresentation()))
+                                    : "(no defined data)";
+            sb.append(String.format("%s -> %s : %s%n", label, a, v));
+        }
+        return sb.toString();
+    }
+
+    /** Read memory by specifying address and size (results in Hexdump style) */
+    private String getBytes(String addressStr, int size) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+        if (size <= 0) return "Size must be > 0";
+
+        try {
+            Address addr = program.getAddressFactory().getAddress(addressStr);
+            byte[] buf   = new byte[size];
+            int read     = program.getMemory().getBytes(addr, buf);
+            return hexdump(addr, buf, read);
+        }
+        catch (Exception e) {
+            return "Error reading memory: " + e.getMessage();
+        }
+    }
+
+    /** Scan the entire program to search for a byte sequence */
+    private String searchBytes(String bytesHex, int offset, int limit) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (bytesHex == null || bytesHex.isEmpty()) return "Byte sequence required";
+
+        byte[] needle;
+        try { needle = decodeHex(bytesHex); }
+        catch (IllegalArgumentException e) { return "Invalid hex string: " + bytesHex; }
+
+        Memory mem = program.getMemory();
+        List<String> hits = new ArrayList<>();
+
+        Address cur = mem.getMinAddress();
+        while (cur != null && hits.size() < offset + limit) {
+            Address found = mem.findBytes(cur, needle, null, true, TaskMonitorAdapter.DUMMY_MONITOR);
+            if (found == null) break;
+            hits.add(found.toString());
+
+            cur = found.add(1);
+        }
+
+        return paginateList(hits, offset, limit);
+    }
+
+    private String hexdump(Address base, byte[] buf, int len) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < len; i += 16) {
+            sb.append(String.format("%s  ", base.add(i)));
+            for (int j = 0; j < 16 && (i + j) < len; j++) {
+                sb.append(String.format("%02X ", buf[i + j]));
+            }
+            sb.append('\n');
+        }
+        return sb.toString();
+    }
+
+    private byte[] decodeHex(String hex) {
+        hex = hex.replaceAll("\\s+", "");
+        if (hex.length() % 2 != 0) throw new IllegalArgumentException();
+        byte[] out = new byte[hex.length() / 2];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = (byte) Integer.parseInt(hex.substring(i*2, i*2+2), 16);
+        }
+        return out;
     }
 
     /**

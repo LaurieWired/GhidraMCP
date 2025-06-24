@@ -287,6 +287,58 @@ def list_strings(offset: int = 0, limit: int = 2000, filter: str = None) -> list
         params["filter"] = filter
     return safe_get("strings", params)
 
+@mcp.tool()
+def get_data_by_label(label: str) -> str:
+    """
+    Get information about a data label.
+
+    Args:
+        label: Exact symbol / label name to look up in the program.
+
+    Returns:
+        A newline-separated string.  
+        Each line has:  "<label> -> <address> : <value-representation>"
+        If the label is not found, an explanatory message is returned.
+    """
+    return "\n".join(safe_get("get_data_by_label", {"label": label}))
+
+@mcp.tool()
+def get_bytes(address: str, size: int = 1) -> str:
+    """
+    Read raw bytes from memory and dump them in hex.
+
+    Args:
+        address: Start address in hex notation (e.g. "0x1401003A0").
+        size:    Number of bytes to read (default: 1).
+
+    Returns:
+        A hexdump-style multiline string.  
+        Format: "<address>  <16-byte hex sequence…>".  
+        On error (invalid address / size ≤ 0) an error message is returned.
+    """
+    return "\n".join(safe_get("get_bytes", {"address": address, "size": size}))
+
+@mcp.tool()
+def search_bytes(bytes_hex: str, offset: int = 0, limit: int = 100) -> list:
+    """
+    Search the whole program for a specific byte sequence.
+
+    Args:
+        bytes_hex: Byte sequence encoded as a hex string
+                   (e.g. "DEADBEEF" or "DE AD BE EF").
+        offset:    Pagination offset for results (default: 0).
+        limit:     Maximum number of hit addresses to return (default: 100).
+
+    Returns:
+        A list of addresses (as hex strings) where the sequence was found,
+        subject to pagination.  If no hits, an explanatory message list
+        such as ["No matches found"] is returned.
+    """
+    return safe_get(
+        "search_bytes",
+        {"bytes": bytes_hex, "offset": offset, "limit": limit},
+    )
+
 def main():
     parser = argparse.ArgumentParser(description="MCP server for Ghidra")
     parser.add_argument("--ghidra-server", type=str, default=DEFAULT_GHIDRA_SERVER,
