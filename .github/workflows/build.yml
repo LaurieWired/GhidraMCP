@@ -10,8 +10,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      GHIDRA_VERSION: 11.3.1
-      GHIDRA_DATE: 20250219
+      GHIDRA_VERSION: 11.3.2
+      GHIDRA_DATE: 20250415
       GHIDRA_LIBS: >-
         Features/Base/lib/Base.jar
         Features/Decompiler/lib/Decompiler.jar

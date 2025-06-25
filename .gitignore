@@ -49,3 +49,6 @@ mvnw.cmd
 hs_err_pid*
 replay_pid*
 
+# Third party JAR files from Ghidra
+lib/*.jar
+
