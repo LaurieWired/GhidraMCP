@@ -28,6 +28,10 @@ bin/
 .AppleDouble
 .LSOverride
 
+# Windows
+desktop.ini
+Thumbs.db
+
 # Thumbnails
 ._*
 
@@ -52,3 +56,8 @@ replay_pid*
 # Third party JAR files from Ghidra
 lib/*.jar
 
+# Installation files
+*.zip
+
+# Miscellaneous
+etc/
