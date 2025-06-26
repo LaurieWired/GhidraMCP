@@ -36,5 +36,14 @@
             </includes>
             <outputDirectory>GhidraMCP/lib</outputDirectory>
         </fileSet>
+        
+        <!-- 3) Copy LICENSE file -->
+        <fileSet>
+            <directory>.</directory>
+            <includes>
+                <include>LICENSE</include>
+            </includes>
+            <outputDirectory>GhidraMCP</outputDirectory>
+        </fileSet>
     </fileSets>
 </assembly>

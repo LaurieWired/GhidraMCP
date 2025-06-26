@@ -58,20 +58,88 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * GhidraMCP Plugin - Model Context Protocol Server for Ghidra
+ * 
+ * This plugin creates an HTTP server that exposes Ghidra's analysis capabilities
+ * through a RESTful API, enabling AI language models to autonomously perform
+ * reverse engineering tasks. The plugin integrates with the CodeBrowser tool
+ * and provides comprehensive access to:
+ * 
+ * <ul>
+ * <li>Function decompilation and analysis</li>
+ * <li>Symbol and variable management</li>
+ * <li>Memory and data structure examination</li>
+ * <li>Cross-reference analysis</li>
+ * <li>Binary annotation and commenting</li>
+ * </ul>
+ * 
+ * <h3>Server Lifecycle</h3>
+ * The HTTP server automatically starts when the plugin is enabled in CodeBrowser
+ * with an active program loaded. The server runs on a configurable port (default: 8080)
+ * and remains active while the CodeBrowser session continues.
+ * 
+ * <h3>API Endpoints</h3>
+ * The plugin exposes over 20 REST endpoints for comprehensive binary analysis:
+ * <ul>
+ * <li><code>/methods</code> - List all functions with pagination</li>
+ * <li><code>/decompile</code> - Decompile functions by name or address</li>
+ * <li><code>/renameFunction</code> - Rename functions and variables</li>
+ * <li><code>/xrefs_to</code> - Analyze cross-references</li>
+ * <li><code>/strings</code> - Extract and filter string data</li>
+ * </ul>
+ * 
+ * <h3>Thread Safety</h3>
+ * All Ghidra API interactions are properly synchronized using SwingUtilities.invokeAndWait()
+ * to ensure thread safety with Ghidra's event dispatch thread.
+ * 
+ * @author LaurieWired
+ * @version 1.3.2
+ * @since Ghidra 11.3.2
+ * @see ghidra.framework.plugintool.Plugin
+ * @see com.sun.net.httpserver.HttpServer
+ */
 @PluginInfo(
     status = PluginStatus.RELEASED,
     packageName = ghidra.app.DeveloperPluginPackage.NAME,
-    category = PluginCategoryNames.ANALYSIS,
+    category = "Developer",
     shortDescription = "HTTP server plugin",
     description = "Starts an embedded HTTP server to expose program data. Port configurable via Tool Options."
 )
 public class GhidraMCPPlugin extends Plugin {
 
+    /** The embedded HTTP server instance that handles all API requests */
     private HttpServer server;
+    
+    /** Configuration category name for tool options */
     private static final String OPTION_CATEGORY_NAME = "GhidraMCP HTTP Server";
+    
+    /** Configuration option name for the server port setting */
     private static final String PORT_OPTION_NAME = "Server Port";
+    
+    /** Default port number for the HTTP server (8080) */
     private static final int DEFAULT_PORT = 8080;
 
+    /**
+     * Constructs a new GhidraMCP plugin instance and initializes the HTTP server.
+     * 
+     * This constructor:
+     * <ol>
+     * <li>Registers the port configuration option in Ghidra's tool options</li>
+     * <li>Starts the embedded HTTP server on the configured port</li>
+     * <li>Creates all REST API endpoint handlers</li>
+     * </ol>
+     * 
+     * The server will only function properly when:
+     * <ul>
+     * <li>A program is loaded in the current CodeBrowser session</li>
+     * <li>The plugin is enabled in the Developer tools configuration</li>
+     * </ul>
+     * 
+     * @param tool The Ghidra PluginTool instance that hosts this plugin
+     * @throws IllegalStateException if the HTTP server fails to start
+     * @see #startServer()
+     */
     public GhidraMCPPlugin(PluginTool tool) {
         super(tool);
         Msg.info(this, "GhidraMCPPlugin loading...");
@@ -92,6 +160,47 @@ public class GhidraMCPPlugin extends Plugin {
         Msg.info(this, "GhidraMCPPlugin loaded!");
     }
 
+    /**
+     * Initializes and starts the embedded HTTP server with all API endpoints.
+     * 
+     * This method creates an HTTP server instance and registers handlers for all
+     * supported REST API endpoints. The server supports:
+     * 
+     * <h4>Function Analysis Endpoints:</h4>
+     * <ul>
+     * <li><code>GET /methods</code> - List functions with pagination</li>
+     * <li><code>POST /decompile</code> - Decompile function by name</li>
+     * <li><code>GET /decompile_function?address=0x...</code> - Decompile by address</li>
+     * <li><code>GET /disassemble_function?address=0x...</code> - Get assembly listing</li>
+     * </ul>
+     * 
+     * <h4>Symbol Management Endpoints:</h4>
+     * <ul>
+     * <li><code>POST /renameFunction</code> - Rename functions</li>
+     * <li><code>POST /renameVariable</code> - Rename local variables</li>
+     * <li><code>POST /set_function_prototype</code> - Set function signatures</li>
+     * </ul>
+     * 
+     * <h4>Analysis and Reference Endpoints:</h4>
+     * <ul>
+     * <li><code>GET /xrefs_to?address=0x...</code> - Find references to address</li>
+     * <li><code>GET /xrefs_from?address=0x...</code> - Find references from address</li>
+     * <li><code>GET /strings</code> - List string data with filtering</li>
+     * </ul>
+     * 
+     * <h4>Commenting and Annotation:</h4>
+     * <ul>
+     * <li><code>POST /set_decompiler_comment</code> - Add pseudocode comments</li>
+     * <li><code>POST /set_disassembly_comment</code> - Add assembly comments</li>
+     * </ul>
+     * 
+     * The server runs on a separate thread to avoid blocking Ghidra's UI thread.
+     * All endpoints return plain text responses with UTF-8 encoding.
+     * 
+     * @throws IOException if the server cannot bind to the configured port
+     * @see #sendResponse(HttpExchange, String)
+     * @see #parseQueryParams(HttpExchange)
+     */
     private void startServer() throws IOException {
         // Read the configured port
         Options options = tool.getOptions(OPTION_CATEGORY_NAME);
@@ -357,6 +466,19 @@ public class GhidraMCPPlugin extends Plugin {
     // Pagination-aware listing methods
     // ----------------------------------------------------------------------------------
 
+    /**
+     * Retrieves a paginated list of all function names in the current program.
+     * 
+     * This method scans the program's function manager to collect all function names
+     * and returns a subset based on the specified offset and limit parameters.
+     * The results are returned as a newline-separated string.
+     * 
+     * @param offset Starting index for pagination (0-based)
+     * @param limit Maximum number of function names to return
+     * @return Newline-separated string of function names, or error message if no program loaded
+     * @see #paginateList(List, int, int)
+     * @see FunctionManager#getFunctions(boolean)
+     */
     private String getAllFunctionNames(int offset, int limit) {
         Program program = getCurrentProgram();
         if (program == null) return "No program loaded";
@@ -490,6 +612,32 @@ public class GhidraMCPPlugin extends Plugin {
     // Logic for rename, decompile, etc.
     // ----------------------------------------------------------------------------------
 
+    /**
+     * Decompiles a function by its name and returns the generated C pseudocode.
+     * 
+     * This method locates a function by name within the current program and uses
+     * Ghidra's DecompInterface to generate readable C-like pseudocode. The decompilation
+     * process includes:
+     * <ul>
+     * <li>Function signature analysis</li>
+     * <li>Local variable identification and typing</li>
+     * <li>Control flow reconstruction</li>
+     * <li>High-level language construct generation</li>
+     * </ul>
+     * 
+     * <b>Thread Safety:</b> This method uses Ghidra's decompiler interface which
+     * is thread-safe for read operations.
+     * 
+     * @param name The exact name of the function to decompile (case-sensitive)
+     * @return The decompiled C pseudocode as a string, or an error message if:
+     *         <ul>
+     *         <li>No program is currently loaded</li>
+     *         <li>Function with the specified name is not found</li>
+     *         <li>Decompilation fails due to analysis issues</li>
+     *         </ul>
+     * @see DecompInterface#decompileFunction(Function, int, TaskMonitor)
+     * @see #decompileFunctionByAddress(String)
+     */
     private String decompileFunctionByName(String name) {
         Program program = getCurrentProgram();
         if (program == null) return "No program loaded";
@@ -509,6 +657,33 @@ public class GhidraMCPPlugin extends Plugin {
         return "Function not found";
     }
 
+    /**
+     * Renames a function from its current name to a new user-specified name.
+     * 
+     * This method performs a thread-safe rename operation by:
+     * <ol>
+     * <li>Locating the function by its current name</li>
+     * <li>Executing the rename within a Ghidra transaction on the Swing EDT</li>
+     * <li>Marking the new name as USER_DEFINED source type</li>
+     * <li>Committing or rolling back the transaction based on success</li>
+     * </ol>
+     * 
+     * <b>Thread Safety:</b> This method uses SwingUtilities.invokeAndWait() to ensure
+     * all Ghidra API calls occur on the Event Dispatch Thread, preventing race conditions
+     * and maintaining data integrity.
+     * 
+     * <b>Transaction Management:</b> The rename operation is wrapped in a Ghidra transaction
+     * to ensure atomicity - either the rename succeeds completely or is fully reverted.
+     * 
+     * @param oldName The current name of the function to rename (case-sensitive)
+     * @param newName The desired new name for the function
+     * @return {@code true} if the function was successfully renamed,
+     *         {@code false} if no program is loaded, function not found, or rename failed
+     * @throws IllegalArgumentException if either parameter is null or empty
+     * @see Function#setName(String, SourceType)
+     * @see SourceType#USER_DEFINED
+     * @see Program#startTransaction(String)
+     */
     private boolean renameFunction(String oldName, String newName) {
         Program program = getCurrentProgram();
         if (program == null) return false;
@@ -900,7 +1075,33 @@ public class GhidraMCPPlugin extends Plugin {
     }
 
     /**
-     * Class to hold the result of a prototype setting operation
+     * Result container for function prototype setting operations.
+     * 
+     * This immutable class encapsulates the outcome of attempting to set a function's
+     * prototype signature, including both success/failure status and detailed error
+     * information for debugging purposes.
+     * 
+     * <p>The class is designed to provide comprehensive feedback about prototype
+     * setting operations, which can be complex due to:
+     * <ul>
+     * <li>C signature parsing requirements</li>
+     * <li>Data type resolution in various categories</li>
+     * <li>Parameter count and type validation</li>
+     * <li>Ghidra's internal function signature constraints</li>
+     * </ul>
+     * 
+     * <b>Usage Example:</b>
+     * <pre>{@code
+     * PrototypeResult result = setFunctionPrototype("0x401000", "int foo(char* str, int len)");
+     * if (result.isSuccess()) {
+     *     System.out.println("Prototype set successfully");
+     * } else {
+     *     System.err.println("Failed: " + result.getErrorMessage());
+     * }
+     * }</pre>
+     * 
+     * @see #setFunctionPrototype(String, String)
+     * @since 1.3.0
      */
     private static class PrototypeResult {
         private final boolean success;
@@ -1532,7 +1733,27 @@ public class GhidraMCPPlugin extends Plugin {
     // ----------------------------------------------------------------------------------
 
     /**
-     * Parse query parameters from the URL, e.g. ?offset=10&limit=100
+     * Parses HTTP query parameters from the request URL into a key-value map.
+     * 
+     * This method extracts query parameters from the URL (the portion after the '?' character)
+     * and decodes them using UTF-8 encoding. It handles URL-encoded parameter values and
+     * properly decodes special characters.
+     * 
+     * <b>Supported Format:</b> {@code ?offset=10&limit=100&filter=test%20string}
+     * 
+     * <b>Example Usage:</b>
+     * <pre>{@code
+     * // For URL: /methods?offset=50&limit=25
+     * Map<String, String> params = parseQueryParams(exchange);
+     * int offset = parseIntOrDefault(params.get("offset"), 0);  // Returns 50
+     * int limit = parseIntOrDefault(params.get("limit"), 100);  // Returns 25
+     * }</pre>
+     * 
+     * @param exchange The HTTP exchange containing the request with query parameters
+     * @return A map of parameter names to their decoded values. Empty map if no parameters exist.
+     *         Parameters without values are ignored.
+     * @see URLDecoder#decode(String, Charset)
+     * @see #parseIntOrDefault(String, int)
      */
     private Map<String, String> parseQueryParams(HttpExchange exchange) {
         Map<String, String> result = new HashMap<>();
@@ -1580,7 +1801,36 @@ public class GhidraMCPPlugin extends Plugin {
     }
 
     /**
-     * Convert a list of strings into one big newline-delimited string, applying offset & limit.
+     * Applies pagination to a list of strings and returns a formatted result.
+     * 
+     * This utility method implements standard pagination behavior by:
+     * <ol>
+     * <li>Validating and constraining the offset to valid bounds</li>
+     * <li>Calculating the end index based on offset + limit</li>
+     * <li>Extracting the requested subset of items</li>
+     * <li>Joining the results with newline characters</li>
+     * </ol>
+     * 
+     * <b>Pagination Logic:</b>
+     * <ul>
+     * <li>If offset >= list size, returns empty string</li>
+     * <li>If offset + limit exceeds list size, returns items from offset to end</li>
+     * <li>Negative offsets are treated as 0</li>
+     * </ul>
+     * 
+     * <b>Example:</b>
+     * <pre>{@code
+     * List<String> functions = Arrays.asList("main", "printf", "malloc", "free", "exit");
+     * String page1 = paginateList(functions, 0, 2);  // Returns "main\nprintf"
+     * String page2 = paginateList(functions, 2, 2);  // Returns "malloc\nfree"
+     * String page3 = paginateList(functions, 4, 2);  // Returns "exit"
+     * }</pre>
+     * 
+     * @param items The complete list of string items to paginate
+     * @param offset Starting index for pagination (0-based, negative values treated as 0)
+     * @param limit Maximum number of items to return
+     * @return Newline-separated string of the requested items, or empty string if no items in range
+     * @see List#subList(int, int)
      */
     private String paginateList(List<String> items, int offset, int limit) {
         int start = Math.max(0, offset);
@@ -1624,6 +1874,25 @@ public class GhidraMCPPlugin extends Plugin {
         return sb.toString();
     }
 
+    /**
+     * Retrieves the currently active program from Ghidra's program manager.
+     * 
+     * This method provides safe access to the current program being analyzed in
+     * the CodeBrowser. It handles cases where no program is loaded or the
+     * ProgramManager service is unavailable.
+     * 
+     * <b>Usage Pattern:</b> This method is called by virtually every API endpoint
+     * to ensure operations are performed on the correct program context.
+     * 
+     * @return The currently loaded Program instance, or {@code null} if:
+     *         <ul>
+     *         <li>No program is currently loaded in CodeBrowser</li>
+     *         <li>ProgramManager service is not available</li>
+     *         <li>Plugin is not properly initialized</li>
+     *         </ul>
+     * @see ProgramManager#getCurrentProgram()
+     * @see PluginTool#getService(Class)
+     */
     public Program getCurrentProgram() {
         ProgramManager pm = tool.getService(ProgramManager.class);
         return pm != null ? pm.getCurrentProgram() : null;
@@ -1638,6 +1907,30 @@ public class GhidraMCPPlugin extends Plugin {
         }
     }
 
+    /**
+     * Cleanly shuts down the HTTP server and releases plugin resources.
+     * 
+     * This method is automatically called by Ghidra when:
+     * <ul>
+     * <li>The plugin is disabled in the CodeBrowser configuration</li>
+     * <li>The CodeBrowser tool is closed</li>
+     * <li>Ghidra is shutting down</li>
+     * <li>The plugin is being reloaded</li>
+     * </ul>
+     * 
+     * <b>Shutdown Process:</b>
+     * <ol>
+     * <li>Stops the HTTP server with a 1-second grace period for active connections</li>
+     * <li>Nullifies the server reference to prevent further use</li>
+     * <li>Calls the parent dispose method to clean up plugin infrastructure</li>
+     * </ol>
+     * 
+     * <b>Thread Safety:</b> This method can be called from any thread and safely
+     * handles concurrent access to the server instance.
+     * 
+     * @see HttpServer#stop(int)
+     * @see Plugin#dispose()
+     */
     @Override
     public void dispose() {
         if (server != null) {
