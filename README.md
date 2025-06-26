@@ -31,13 +31,88 @@ MCP Server + Ghidra Plugin
 ## Ghidra
 First, download the latest [release](https://github.com/LaurieWired/GhidraMCP/releases) from this repository. This contains the Ghidra plugin and Python MCP client. Then, you can directly import the plugin into Ghidra.
 
+### Plugin Installation
 1. Run Ghidra
 2. Select `File` -> `Install Extensions`
 3. Click the `+` button
 4. Select the `GhidraMCP-1-2.zip` (or your chosen version) from the downloaded release
 5. Restart Ghidra
-6. Make sure the GhidraMCPPlugin is enabled in `File` -> `Configure` -> `Developer`
-7. *Optional*: Configure the port in Ghidra with `Edit` -> `Tool Options` -> `GhidraMCP HTTP Server`
+
+### Plugin Configuration and Activation
+**Important**: The GhidraMCP plugin operates within Ghidra's **CodeBrowser** tool, not the Project Manager.
+
+6. **Create or open a Ghidra project** in the Project Manager
+7. **Import and open a binary** for analysis (the plugin requires an active program)
+8. **Open the CodeBrowser** tool (double-click your imported program or use Tools → CodeBrowser)
+9. In the CodeBrowser, navigate to `File` → `Configure` → `Developer`
+10. **Enable the GhidraMCPPlugin** in the Developer tools list
+11. The HTTP server will start automatically when the plugin is enabled with an active program
+
+### Server Configuration
+- *Optional*: Configure the server port in CodeBrowser via `Edit` → `Tool Options` → `GhidraMCP HTTP Server`
+- Default server address: `http://127.0.0.1:8080/`
+- The HTTP server only runs when:
+  - CodeBrowser is open
+  - A program is loaded
+  - GhidraMCPPlugin is enabled
+
+### Understanding Ghidra's Architecture
+Ghidra uses a multi-tool architecture:
+- **Project Manager**: Manages projects and imports binaries
+- **CodeBrowser**: The main analysis tool where most plugins operate
+- **Other Tools**: Various specialized analysis tools
+
+The GhidraMCP plugin specifically integrates with the CodeBrowser tool's analysis capabilities.
+
+### Troubleshooting
+**Plugin not visible in File → Configure → Developer:**
+- Ensure you've restarted Ghidra after installing the extension
+- Verify you're in the CodeBrowser tool, not the Project Manager
+- Check that a program is loaded and active
+
+**HTTP server not responding:**
+- Confirm the plugin is enabled in CodeBrowser's Developer tools
+- Verify a binary program is loaded and analyzed
+- Check the server port configuration in Tool Options
+- Ensure no firewall is blocking localhost connections
+
+**"Connection refused" errors:**
+- The HTTP server only starts when CodeBrowser is open with the plugin enabled
+- Close and reopen CodeBrowser if the server seems stuck
+- Verify the port matches your MCP client configuration
+
+### Typical Workflow
+1. **Start Ghidra Project Manager**
+2. **Import your target binary** (File → Import File)
+3. **Open CodeBrowser** by double-clicking the imported program
+4. **Enable GhidraMCP plugin** (File → Configure → Developer)
+5. **Start your MCP client** (Claude Desktop, Cline, etc.)
+6. **Begin reverse engineering** with AI assistance
+
+The HTTP server runs continuously while CodeBrowser remains open with the plugin enabled.
+
+## Documentation
+
+Comprehensive API documentation is available via Doxygen. See **[DOCUMENTATION.md](DOCUMENTATION.md)** for the complete documentation guide.
+
+### Quick Access
+- **HTML Documentation**: Open `docs/html/index.html` in your web browser
+- **Main Plugin Class**: [GhidraMCPPlugin Documentation](docs/html/classcom_1_1lauriewired_1_1_ghidra_m_c_p_plugin.html)
+- **Package Overview**: [com.lauriewired Package](docs/html/namespacecom_1_1lauriewired.html)
+
+### Generating Updated Documentation
+To regenerate documentation after code changes:
+```bash
+doxygen Doxyfile
+```
+
+The documentation includes:
+- Complete API reference for all HTTP endpoints
+- Method signatures and parameter descriptions
+- Usage examples and code patterns
+- Class hierarchy and relationships
+- Thread safety and transaction information
+- Integration examples and best practices
 
 Video Installation Guide:
 

@@ -1,0 +1,9 @@
+<map id="src/test/java/com/lauriewired/AppTest.java" name="src/test/java/com/lauriewired/AppTest.java">
+<area shape="rect" id="Node000001" title=" " alt="" coords="160,5,348,48"/>
+<area shape="rect" id="Node000002" title=" " alt="" coords="5,96,145,123"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="209,51,118,92,116,87,207,46"/>
+<area shape="rect" id="Node000003" title=" " alt="" coords="168,96,339,123"/>
+<area shape="poly" id="edge2_Node000001_Node000003" title=" " alt="" coords="256,49,256,80,251,80,251,49"/>
+<area shape="rect" id="Node000004" title=" " alt="" coords="362,96,532,123"/>
+<area shape="poly" id="edge3_Node000001_Node000004" title=" " alt="" coords="304,46,404,87,402,92,302,51"/>
+</map>
