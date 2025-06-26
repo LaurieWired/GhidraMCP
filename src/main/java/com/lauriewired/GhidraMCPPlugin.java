@@ -61,7 +61,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @PluginInfo(
     status = PluginStatus.RELEASED,
     packageName = ghidra.app.DeveloperPluginPackage.NAME,
-    category = PluginCategoryNames.ANALYSIS,
+    category = "Developer",
     shortDescription = "HTTP server plugin",
     description = "Starts an embedded HTTP server to expose program data. Port configurable via Tool Options."
 )

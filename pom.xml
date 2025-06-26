@@ -80,6 +80,20 @@
 
   <build>
     <plugins>
+      <!-- Configure Java version for compatibility -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+        <configuration>
+          <source>8</source>
+          <target>8</target>
+          <compilerArgs>
+            <arg>-Xlint:-options</arg>
+          </compilerArgs>
+        </configuration>
+      </plugin>
+      
       <!-- Use custom MANIFEST.MF -->
       <plugin>
         <artifactId>maven-jar-plugin</artifactId>
