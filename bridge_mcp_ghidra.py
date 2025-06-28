@@ -7,6 +7,7 @@
 # ///
 
 import sys
+import json
 import requests
 import argparse
 import logging
@@ -286,6 +287,97 @@ def list_strings(offset: int = 0, limit: int = 2000, filter: str = None) -> list
     if filter:
         params["filter"] = filter
     return safe_get("strings", params)
+
+@mcp.tool()
+def create_struct(name: str, category: str = None, size: int = 0, members: list = None) -> str:
+    """
+    Create a new structure.
+    
+    Args:
+        name: The name of the new structure.
+        category: The category path for the structure (e.g., /my_structs). Defaults to root.
+        size: The initial size of the structure.
+        members: A list of member dictionaries to add to the new struct.
+                 Each dict should have 'name', 'type', and optionally 'offset' and 'comment'.
+                 The 'type' should be a builtin C datatype or a structure name defined in Ghidra data type manager.
+                 Pointers are specified with asterisk, e.g. void*, int* or PCSTR, PVOID for Windows types
+                 Example: [{"name": "field1", "type": "int", "offset": 0, "comment": "my field"}]
+                 
+    Returns:
+        A status message indicating success or failure.
+    """
+    data = {"name": name, "size": str(size)}
+    if category:
+        data["category"] = category
+    if members:
+        data["members"] = json.dumps(members)
+    return safe_post("create_struct", data)
+
+@mcp.tool()
+def add_struct_members(struct_name: str, members: list, category: str = None) -> str:
+    """
+    Add a member to an existing structure.
+    
+    Args:
+        struct_name: The name of the structure to modify.
+        members: A list of member dictionaries to add to the new struct.
+                 Each dict should have 'name', 'type', and optionally 'offset' and 'comment'.
+                 The 'type' should be a builtin C datatype or a structure name defined in Ghidra data type manager.
+                 Pointers are specified with asterisk, e.g. void*, int* or PCSTR, PVOID for Windows types
+                 Example: [{"name": "field1", "type": "int", "offset": 0, "comment": "my field"}]
+        category: The category path for the structure. Defaults to root.
+        
+    Returns:
+        A status message indicating success or failure.
+    """
+
+    data = {"struct_name": struct_name, "members": json.dumps(members)}
+    if category:
+        data["category"] = category
+    return safe_post("add_struct_members", data)
+
+@mcp.tool()
+def clear_struct(struct_name: str, category: str = None) -> str:
+    """
+    Remove all members from a structure.
+    
+    Args:
+        struct_name: The name of the structure to clear.
+        category: The category path for the structure. Defaults to root.
+        
+    Returns:
+        A status message indicating success or failure.
+    """
+    data = {"struct_name": struct_name}
+    if category:
+        data["category"] = category
+    return safe_post("clear_struct", data)
+
+@mcp.tool()
+def get_struct(name: str, category: str = None) -> dict:
+    """
+    Get a struct's definition.
+    
+    Args:
+        name: The name of the structure.
+        category: The category path for the structure. Defaults to root.
+        
+    Returns:
+        A dictionary representing the struct, or an error message.
+    """
+    params = {"name": name}
+    if category:
+        params["category"] = category
+    
+    response_lines = safe_get("get_struct", params)
+    response_str = "\n".join(response_lines)
+    
+    try:
+        # Attempt to parse the JSON response
+        return json.loads(response_str)
+    except json.JSONDecodeError:
+        # If it's not JSON, it's likely an error message
+        return {"error": response_str}
 
 def main():
     parser = argparse.ArgumentParser(description="MCP server for Ghidra")
