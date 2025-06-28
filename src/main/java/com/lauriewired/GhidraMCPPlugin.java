@@ -37,7 +37,11 @@ import ghidra.util.task.TaskMonitor;
 import ghidra.program.model.pcode.HighVariable;
 import ghidra.program.model.pcode.Varnode;
 import ghidra.program.model.data.DataType;
+import ghidra.program.model.data.DataTypeConflictHandler;
+import ghidra.program.model.data.DataTypeComponent;
 import ghidra.program.model.data.DataTypeManager;
+import ghidra.program.model.data.Structure;
+import ghidra.program.model.data.StructureDataType;
 import ghidra.program.model.data.PointerDataType;
 import ghidra.program.model.data.Undefined1DataType;
 import ghidra.program.model.listing.Variable;
@@ -45,18 +49,28 @@ import ghidra.app.decompiler.component.DecompilerUtils;
 import ghidra.app.decompiler.ClangToken;
 import ghidra.framework.options.Options;
 
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
 import javax.swing.SwingUtilities;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.UnsupportedEncodingException;
 import java.lang.reflect.InvocationTargetException;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import ghidra.program.model.data.CategoryPath;
+import ghidra.app.services.DataTypeManagerService;
+import ghidra.util.data.DataTypeParser;
+import ghidra.util.data.DataTypeParser.AllowedDataTypes;
 
 @PluginInfo(
     status = PluginStatus.RELEASED,
@@ -339,6 +353,55 @@ public class GhidraMCPPlugin extends Plugin {
             int limit = parseIntOrDefault(qparams.get("limit"), 100);
             String filter = qparams.get("filter");
             sendResponse(exchange, listDefinedStrings(offset, limit, filter));
+        });
+
+        server.createContext("/create_struct", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String name = params.get("name");
+            String category = params.get("category");
+            long size = parseIntOrDefault(params.get("size"), 0);
+            String membersJson = params.get("members"); // Optional
+
+            if (name == null || name.isEmpty()) {
+                sendResponse(exchange, "Struct name is required");
+                return;
+            }
+            sendResponse(exchange, createStruct(name, category, (int)size, membersJson));
+        });
+
+        server.createContext("/add_struct_members", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String structName = params.get("struct_name");
+            String category = params.get("category");
+            String membersJson = params.get("members");
+
+            if (structName == null || membersJson == null) {
+                sendResponse(exchange, "struct_name and members are required");
+                return;
+            }
+            sendResponse(exchange, addStructMembers(structName, category, membersJson));
+        });
+
+        server.createContext("/clear_struct", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String structName = params.get("struct_name");
+            String category = params.get("category");
+            if (structName == null) {
+                sendResponse(exchange, "struct_name is required");
+                return;
+            }
+            sendResponse(exchange, clearStruct(structName, category));
+        });
+
+        server.createContext("/get_struct", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String structName = qparams.get("name");
+            String category = qparams.get("category");
+            if (structName == null) {
+                sendResponse(exchange, "name is required");
+                return;
+            }
+            sendResponse(exchange, getStruct(structName, category));
         });
 
         server.setExecutor(null);
@@ -1418,80 +1481,38 @@ public class GhidraMCPPlugin extends Plugin {
      * @param dtm The data type manager
      * @param typeName The type name to resolve
      * @return The resolved DataType, or null if not found
-     */
-    private DataType resolveDataType(DataTypeManager dtm, String typeName) {
-        // First try to find exact match in all categories
-        DataType dataType = findDataTypeByNameInAllCategories(dtm, typeName);
-        if (dataType != null) {
-            Msg.info(this, "Found exact data type match: " + dataType.getPathName());
-            return dataType;
+    */
+    private DataType resolveDataType(DataTypeManager dtm, String typeName){
+        DataTypeManagerService dtms = tool.getService(DataTypeManagerService.class);
+        DataTypeManager[] managers = dtms.getDataTypeManagers();
+        DataType dt = null;
+
+        List<DataTypeManager> managerList = new ArrayList<>();
+        for (DataTypeManager manager : managers) {
+            if(manager!=dtm)
+                managerList.add(manager);
         }
+        managerList.addFirst(dtm);
 
-        // Check for Windows-style pointer types (PXXX)
-        if (typeName.startsWith("P") && typeName.length() > 1) {
-            String baseTypeName = typeName.substring(1);
 
-            // Special case for PVOID
-            if (baseTypeName.equals("VOID")) {
-                return new PointerDataType(dtm.getDataType("/void"));
-            }
+        DataTypeParser parser = null;
 
-            // Try to find the base type
-            DataType baseType = findDataTypeByNameInAllCategories(dtm, baseTypeName);
-            if (baseType != null) {
-                return new PointerDataType(baseType);
-            }
-
-            Msg.warn(this, "Base type not found for " + typeName + ", defaulting to void*");
-            return new PointerDataType(dtm.getDataType("/void"));
-        }
-
-        // Handle common built-in types
-        switch (typeName.toLowerCase()) {
-            case "int":
-            case "long":
-                return dtm.getDataType("/int");
-            case "uint":
-            case "unsigned int":
-            case "unsigned long":
-            case "dword":
-                return dtm.getDataType("/uint");
-            case "short":
-                return dtm.getDataType("/short");
-            case "ushort":
-            case "unsigned short":
-            case "word":
-                return dtm.getDataType("/ushort");
-            case "char":
-            case "byte":
-                return dtm.getDataType("/char");
-            case "uchar":
-            case "unsigned char":
-                return dtm.getDataType("/uchar");
-            case "longlong":
-            case "__int64":
-                return dtm.getDataType("/longlong");
-            case "ulonglong":
-            case "unsigned __int64":
-                return dtm.getDataType("/ulonglong");
-            case "bool":
-            case "boolean":
-                return dtm.getDataType("/bool");
-            case "void":
-                return dtm.getDataType("/void");
-            default:
-                // Try as a direct path
-                DataType directType = dtm.getDataType("/" + typeName);
-                if (directType != null) {
-                    return directType;
+        for (DataTypeManager manager : managerList) {
+            try {
+                parser = new DataTypeParser(manager, null, null, AllowedDataTypes.ALL);
+                dt = parser.parse(typeName);
+                if (dt != null) {
+                    return dt; // Found a successful parse, return
                 }
-
-                // Fallback to int if we couldn't find it
-                Msg.warn(this, "Unknown type: " + typeName + ", defaulting to int");
-                return dtm.getDataType("/int");
+            } catch (Exception e) {
+                // Continue to next manager if this one fails
+            }
         }
+        // Fallback to int if we couldn't find it
+        Msg.warn(this, "Unknown type: " + typeName + ", defaulting to int");
+        return dtm.getDataType("/int");
     }
-    
+
     /**
      * Find a data type by name in all categories/folders of the data type manager
      * This searches through all categories rather than just the root
@@ -1525,6 +1546,206 @@ public class GhidraMCPPlugin extends Plugin {
             }
         }
         return null;
+    }
+
+
+    private static class StructMember {
+        String name;
+        String type;
+        String comment;
+        double offset = -1; // Use double to handle GSON parsing number as double
+    }
+
+    private String createStruct(String name, String category, int size, String membersJson) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        final AtomicReference<String> result = new AtomicReference<>();
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int txId = program.startTransaction("Create Struct");
+                boolean success = false;
+                try {
+                    DataTypeManager dtm = program.getDataTypeManager();
+                    CategoryPath path = new CategoryPath(category == null ? "/" : category);
+                    
+                    if (dtm.getDataType(path, name) != null) {
+                        result.set("Error: Struct " + name + " already exists in category " + path);
+                        return;
+                    }
+                    StructureDataType newStruct = new StructureDataType(path, name, size, dtm);
+
+                    StringBuilder responseBuilder = new StringBuilder("Struct " + name + " created successfully in category " + path);
+
+                    if (membersJson != null && !membersJson.isEmpty()) {
+                        Gson gson = new Gson();
+                        StructMember[] members = gson.fromJson(membersJson, StructMember[].class);
+                        
+                        int membersAdded = 0;
+                        for (StructMember member : members) {
+                            DataType memberDt = resolveDataType(dtm, member.type);
+                            if (memberDt == null) {
+                                responseBuilder.append("\nError: Could not resolve data type '").append(member.type)
+                                               .append("' for member '").append(member.name).append("'. Aborting further member creation.");
+                                break; 
+                            }
+
+                            if (member.offset != -1) {
+                                newStruct.insertAtOffset((int)member.offset, memberDt, -1, member.name, member.comment);
+                            } else {
+                                newStruct.add(memberDt, member.name, member.comment);
+                            }
+                            membersAdded++;
+                        }
+                        responseBuilder.append("\nAdded ").append(membersAdded).append(" members.");
+                    }
+                    dtm.addDataType(newStruct, DataTypeConflictHandler.DEFAULT_HANDLER);
+                    result.set(responseBuilder.toString());
+                    success = true;
+                } catch (Exception e) {
+                    result.set("Error: Failed to create struct: " + e.getMessage());
+                } finally {
+                    program.endTransaction(txId, success);
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Error: Failed to execute create struct on Swing thread: " + e.getMessage();
+        }
+        return result.get();
+    }
+
+    private String addStructMembers(String structName, String category, String membersJson) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        final AtomicReference<String> result = new AtomicReference<>();
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int txId = program.startTransaction("Add Struct Member");
+                boolean success = false;
+                try {
+                    DataTypeManager dtm = program.getDataTypeManager();
+                    CategoryPath path = new CategoryPath(category == null ? "/" : category);
+                    DataType dt = dtm.getDataType(path, structName);
+
+                    if (dt == null || !(dt instanceof Structure)) {
+                        result.set("Error: Struct " + structName + " not found in category " + path);
+                        return;
+                    }
+                    Structure struct = (Structure) dt;
+
+                   StringBuilder responseBuilder = new StringBuilder();
+
+                    if (membersJson != null && !membersJson.isEmpty()) {
+                        Gson gson = new Gson();
+                        StructMember[] members = gson.fromJson(membersJson, StructMember[].class);
+                        
+                        int membersAdded = 0;
+                        for (StructMember member : members) {
+                            DataType memberDt = resolveDataType(dtm, member.type);
+                            if (memberDt == null) {
+                                responseBuilder.append("\nError: Could not resolve data type '").append(member.type)
+                                               .append("' for member '").append(member.name).append("'. Aborting further member creation.");
+                                break; 
+                            }
+
+                            if (member.offset != -1) {
+                                struct.insertAtOffset((int)member.offset, memberDt, -1, member.name, member.comment);
+                            } else {
+                                struct.add(memberDt, member.name, member.comment);
+                            }
+                            membersAdded++;
+                        }
+                        responseBuilder.append("\nAdded ").append(membersAdded).append(" members.");
+                        result.set(responseBuilder.toString());
+                        success = membersAdded>0;
+                    }
+
+                } catch (Exception e) {
+                    result.set("Error: Failed to add member to struct: " + e.getMessage());
+                } finally {
+                    program.endTransaction(txId, success);
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Error: Failed to execute add struct member on Swing thread: " + e.getMessage();
+        }
+        return result.get();
+    }
+
+
+    private String clearStruct(String structName, String category) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        final AtomicReference<String> result = new AtomicReference<>();
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int txId = program.startTransaction("Clear Struct");
+                boolean success = false;
+                try {
+                    DataTypeManager dtm = program.getDataTypeManager();
+                    CategoryPath path = new CategoryPath(category == null ? "/" : category);
+                    DataType dt = dtm.getDataType(path, structName);
+                    if (dt == null || !(dt instanceof Structure)) {
+                        result.set("Error: Struct " + structName + " not found in category " + path);
+                        return;
+                    }
+                    Structure struct = (Structure) dt;
+                    if (struct.isNotYetDefined()) {
+                        result.set("Struct " + structName + " is empty, nothing to clear.");
+                        success = true; // Not an error state
+                        return;
+                    }
+                    struct.deleteAll();
+                    result.set("Struct " + structName + " cleared.");
+                    success = true;
+                } catch (Exception e) {
+                    result.set("Error: Failed to clear struct: " + e.getMessage());
+                } finally {
+                    program.endTransaction(txId, success);
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Error: Failed to execute clear struct on Swing thread: " + e.getMessage();
+        }
+        return result.get();
+    }
+
+    private String getStruct(String structName, String category) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        DataTypeManager dtm = program.getDataTypeManager();
+        CategoryPath path = new CategoryPath(category == null ? "/" : category);
+        DataType dt = dtm.getDataType(path, structName);
+
+        if (dt == null || !(dt instanceof Structure)) {
+            return "Error: Struct " + structName + " not found in category " + path;
+        }
+
+        Structure struct = (Structure) dt;
+
+        Map<String, Object> structRepr = new HashMap<>();
+        structRepr.put("name", struct.getName());
+        structRepr.put("category", struct.getCategoryPath().getPath());
+        structRepr.put("size", struct.getLength());
+        structRepr.put("isNotYetDefined", struct.isNotYetDefined());
+
+        List<Map<String, Object>> membersList = new ArrayList<>();
+        for (DataTypeComponent component : struct.getDefinedComponents()) {
+            Map<String, Object> memberMap = new HashMap<>();
+            memberMap.put("name", component.getFieldName());
+            memberMap.put("type", component.getDataType().getName());
+            memberMap.put("offset", component.getOffset());
+            memberMap.put("size", component.getLength());
+            memberMap.put("comment", component.getComment());
+            membersList.add(memberMap);
+        }
+        structRepr.put("members", membersList);
+
+        Gson gson = new Gson();
+        return gson.toJson(structRepr);
     }
 
     // ----------------------------------------------------------------------------------
