@@ -44,6 +44,7 @@ import ghidra.program.model.listing.Variable;
 import ghidra.app.decompiler.component.DecompilerUtils;
 import ghidra.app.decompiler.ClangToken;
 import ghidra.framework.options.Options;
+import ghidra.program.model.block.*;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -339,6 +340,12 @@ public class GhidraMCPPlugin extends Plugin {
             int limit = parseIntOrDefault(qparams.get("limit"), 100);
             String filter = qparams.get("filter");
             sendResponse(exchange, listDefinedStrings(offset, limit, filter));
+        });
+
+        server.createContext("/cfg", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String functionName = qparams.get("function");
+            sendResponse(exchange, generateCFGOverview(functionName));
         });
 
         server.setExecutor(null);
@@ -1505,6 +1512,137 @@ public class GhidraMCPPlugin extends Plugin {
 
         // Try lowercase
         return searchByNameInAllCategories(dtm, typeName.toLowerCase());
+    }
+
+    /**
+     * Generate CFG overview for a specific function or all functions
+     */
+    private String generateCFGOverview(String functionName) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        StringBuilder result = new StringBuilder();
+        result.append("# [CFG_OVERVIEW]\n");
+        result.append("# High-level logical structure of the function, derived from CFG and pattern analysis.\n");
+        result.append("# FORMAT: BLOCK_LABEL -> [SUCCESSORS]\n\n");
+
+        FunctionManager funcManager = program.getFunctionManager();
+        
+        if (functionName != null && !functionName.isEmpty()) {
+            // Generate CFG for specific function
+            Function targetFunc = null;
+            for (Function func : funcManager.getFunctions(true)) {
+                if (func.getName().equals(functionName)) {
+                    targetFunc = func;
+                    break;
+                }
+            }
+            
+            if (targetFunc == null) {
+                return "Function '" + functionName + "' not found";
+            }
+            
+            result.append(generateFunctionCFG(targetFunc));
+        } else {
+            // Generate CFG for all functions
+            for (Function func : funcManager.getFunctions(true)) {
+                if (func.isThunk()) continue;
+                
+                result.append("## Function: ").append(func.getName()).append("\n");
+                result.append("## Entry Point: ").append(func.getEntryPoint().toString()).append("\n\n");
+                result.append(generateFunctionCFG(func));
+                result.append("\n").append("=".repeat(80)).append("\n\n");
+            }
+        }
+
+        return result.toString();
+    }
+
+    /**
+     * Generate CFG overview for a specific function
+     */
+    private String generateFunctionCFG(Function function) {
+        StringBuilder result = new StringBuilder();
+        Map<String, List<String>> blockSuccessors = extractBlockSuccessors(function);
+        
+        for (Map.Entry<String, List<String>> entry : blockSuccessors.entrySet()) {
+            String blockLabel = entry.getKey();
+            List<String> successors = entry.getValue();
+            
+            // Determine if this is a conditional block (has exactly 2 successors)
+            boolean isConditional = successors.size() == 2;
+            
+            if (isConditional) {
+                result.append(String.format("  %s -> [IF_TRUE: %s, IF_FALSE: %s]  ; Conditional\n", 
+                    blockLabel, successors.get(0), successors.get(1)));
+            } else if (!successors.isEmpty()) {
+                result.append(String.format("  %s -> [%s]\n", 
+                    blockLabel, String.join(", ", successors)));
+            } else {
+                result.append(String.format("  %s ; Exit Block\n", blockLabel));
+            }
+        }
+        
+        return result.toString();
+    }
+
+    /**
+     * Extract block successors for a function
+     */
+    private Map<String, List<String>> extractBlockSuccessors(Function function) {
+        Map<String, List<String>> blockSuccessors = new HashMap<>();
+
+        // Get the function's body
+        AddressSetView body = function.getBody();
+        if (body == null) return blockSuccessors;
+
+        try {
+            // Get the basic blocks
+            SimpleBlockModel bbModel = new SimpleBlockModel(currentProgram);
+            CodeBlockIterator blocks = bbModel.getCodeBlocks(monitor);
+
+            // First pass: collect all blocks in the function
+            while (blocks.hasNext()) {
+                CodeBlock block = blocks.next();
+                if (!body.contains(block.getMinAddress())) {
+                    continue;
+                }
+                
+                String blockLabel = "basic@" + block.getMinAddress().toString();
+                blockSuccessors.put(blockLabel, new ArrayList<>());
+            }
+
+            // Second pass: collect edges
+            blocks = bbModel.getCodeBlocks(monitor);
+            while (blocks.hasNext()) {
+                CodeBlock sourceBlock = blocks.next();
+                if (!body.contains(sourceBlock.getMinAddress())) {
+                    continue;
+                }
+
+                String sourceLabel = "basic@" + sourceBlock.getMinAddress().toString();
+                
+                // Get destinations (edges)
+                CodeBlockReferenceIterator dests = sourceBlock.getDestinations(monitor);
+                while (dests.hasNext()) {
+                    CodeBlockReference dest = dests.next();
+                    CodeBlock targetBlock = dest.getDestinationBlock();
+                    
+                    // Skip if target is not in function body
+                    if (!body.contains(targetBlock.getMinAddress())) {
+                        continue;
+                    }
+
+                    String targetLabel = "basic@" + targetBlock.getMinAddress().toString();
+                    blockSuccessors.get(sourceLabel).add(targetLabel);
+                }
+            }
+
+        } catch (CancelledException e) {
+            Msg.error(this, "Block extraction was cancelled: " + e.getMessage());
+        }
+
+        return blockSuccessors;
     }
 
     /**

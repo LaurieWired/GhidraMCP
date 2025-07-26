@@ -11,10 +11,10 @@ import requests
 import argparse
 import logging
 from urllib.parse import urljoin
+import pyghidra
 
 from mcp.server.fastmcp import FastMCP
 
-DEFAULT_GHIDRA_SERVER = "http://127.0.0.1:8080/"
 
 logger = logging.getLogger(__name__)
 
@@ -23,39 +23,34 @@ mcp = FastMCP("ghidra-mcp")
 # Initialize ghidra_server_url with default value
 ghidra_server_url = DEFAULT_GHIDRA_SERVER
 
-def safe_get(endpoint: str, params: dict = None) -> list:
-    """
-    Perform a GET request with optional query parameters.
-    """
-    if params is None:
-        params = {}
+# Set your Ghidra installation directory and the binary to analyze
+GHIDRA_INSTALL_DIR = r"C:\Path\To\Ghidra"  # TODO: Set this to your Ghidra install path
+BINARY_PATH = r"C:\Path\To\your_binary.exe"  # TODO: Set this to your binary
 
-    url = urljoin(ghidra_server_url, endpoint)
-
+def safe_get(endpoint: str, params: dict = None) -> str:
+    """Make a GET request to the Ghidra server and return the response as a string."""
     try:
-        response = requests.get(url, params=params, timeout=5)
-        response.encoding = 'utf-8'
-        if response.ok:
-            return response.text.splitlines()
-        else:
-            return [f"Error {response.status_code}: {response.text.strip()}"]
-    except Exception as e:
-        return [f"Request failed: {str(e)}"]
+        url = urljoin(ghidra_server_url, endpoint)
+        response = requests.get(url, params=params, timeout=30)
+        response.raise_for_status()
+        return response.text
+    except requests.exceptions.RequestException as e:
+        return f"Error connecting to Ghidra server: {e}"
 
-def safe_post(endpoint: str, data: dict | str) -> str:
+def safe_post(endpoint: str, data: dict = None) -> str:
+    """Make a POST request to the Ghidra server and return the response as a string."""
     try:
         url = urljoin(ghidra_server_url, endpoint)
         if isinstance(data, dict):
-            response = requests.post(url, data=data, timeout=5)
+            # Convert dict to form data
+            response = requests.post(url, data=data, timeout=30)
         else:
-            response = requests.post(url, data=data.encode("utf-8"), timeout=5)
-        response.encoding = 'utf-8'
-        if response.ok:
-            return response.text.strip()
-        else:
-            return f"Error {response.status_code}: {response.text.strip()}"
-    except Exception as e:
-        return f"Request failed: {str(e)}"
+            # Send as raw data
+            response = requests.post(url, data=data, timeout=30)
+        response.raise_for_status()
+        return response.text
+    except requests.exceptions.RequestException as e:
+        return f"Error connecting to Ghidra server: {e}"
 
 @mcp.tool()
 def list_methods(offset: int = 0, limit: int = 100) -> list:
@@ -286,6 +281,33 @@ def list_strings(offset: int = 0, limit: int = 2000, filter: str = None) -> list
     if filter:
         params["filter"] = filter
     return safe_get("strings", params)
+
+@mcp.tool()
+def get_cfg_overview(function: str = None) -> str:
+    """
+    Generate CFG (Control Flow Graph) overview for functions.
+    
+    Args:
+        function: Optional function name to get CFG for specific function. 
+                 If None, returns CFG for all functions.
+        
+    Returns:
+        Text representation of the CFG in the format:
+        # [CFG_OVERVIEW]
+        # High-level logical structure of the function, derived from CFG and pattern analysis.
+        # FORMAT: BLOCK_LABEL -> [SUCCESSORS]
+        
+        ## Function: function_name
+        ## Entry Point: 0xaddress
+        
+          basic@0xaddress -> [IF_TRUE: basic@0xaddress, IF_FALSE: basic@0xaddress]  ; Conditional
+          basic@0xaddress -> [basic@0xaddress, basic@0xaddress]
+          basic@0xaddress ; Exit Block
+    """
+    params = {}
+    if function:
+        params["function"] = function
+    return safe_get("cfg", params)
 
 def main():
     parser = argparse.ArgumentParser(description="MCP server for Ghidra")
