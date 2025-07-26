@@ -45,6 +45,8 @@ import ghidra.app.decompiler.component.DecompilerUtils;
 import ghidra.app.decompiler.ClangToken;
 import ghidra.framework.options.Options;
 import ghidra.program.model.block.*;
+import ghidra.program.model.address.AddressSetView;
+import ghidra.util.exception.CancelledException;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -1597,8 +1599,15 @@ public class GhidraMCPPlugin extends Plugin {
         if (body == null) return blockSuccessors;
 
         try {
+            // Get the current program
+            Program program = getCurrentProgram();
+            if (program == null) return blockSuccessors;
+            
+            // Create a task monitor
+            TaskMonitor monitor = new ConsoleTaskMonitor();
+            
             // Get the basic blocks
-            SimpleBlockModel bbModel = new SimpleBlockModel(currentProgram);
+            SimpleBlockModel bbModel = new SimpleBlockModel(program);
             CodeBlockIterator blocks = bbModel.getCodeBlocks(monitor);
 
             // First pass: collect all blocks in the function
