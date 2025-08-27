@@ -341,6 +341,14 @@ public class GhidraMCPPlugin extends Plugin {
             sendResponse(exchange, listDefinedStrings(offset, limit, filter));
         });
 
+        server.createContext("/searchStrings", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String searchTerm = qparams.get("query");
+            int offset = parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = parseIntOrDefault(qparams.get("limit"), 100);
+            sendResponse(exchange, searchStringsByContent(searchTerm, offset, limit));
+        });
+
         server.setExecutor(null);
         new Thread(() -> {
             try {
@@ -446,21 +454,24 @@ public class GhidraMCPPlugin extends Plugin {
         if (program == null) return "No program loaded";
 
         List<String> lines = new ArrayList<>();
-        for (MemoryBlock block : program.getMemory().getBlocks()) {
-            DataIterator it = program.getListing().getDefinedData(block.getStart(), true);
-            while (it.hasNext()) {
-                Data data = it.next();
-                if (block.contains(data.getAddress())) {
-                    String label   = data.getLabel() != null ? data.getLabel() : "(unnamed)";
-                    String valRepr = data.getDefaultValueRepresentation();
-                    lines.add(String.format("%s: %s = %s",
-                        data.getAddress(),
-                        escapeNonAscii(label),
-                        escapeNonAscii(valRepr)
-                    ));
-                }
+        Set<Address> seenAddresses = new HashSet<>(); // Track seen addresses to avoid duplicates
+        
+        // Iterate through all defined data in the program
+        DataIterator dataIt = program.getListing().getDefinedData(true);
+        while (dataIt.hasNext()) {
+            Data data = dataIt.next();
+            if (data != null && !seenAddresses.contains(data.getAddress())) {
+                seenAddresses.add(data.getAddress());
+                String label = data.getLabel() != null ? data.getLabel() : "(unnamed)";
+                String valRepr = data.getDefaultValueRepresentation();
+                lines.add(String.format("%s: %s = %s",
+                    data.getAddress(),
+                    escapeNonAscii(label),
+                    escapeNonAscii(valRepr)
+                ));
             }
         }
+        
         return paginateList(lines, offset, limit);
     }
 
@@ -665,39 +676,39 @@ public class GhidraMCPPlugin extends Plugin {
 
     /**
      * Copied from AbstractDecompilerAction.checkFullCommit, it's protected.
-	 * Compare the given HighFunction's idea of the prototype with the Function's idea.
-	 * Return true if there is a difference. If a specific symbol is being changed,
-	 * it can be passed in to check whether or not the prototype is being affected.
-	 * @param highSymbol (if not null) is the symbol being modified
-	 * @param hfunction is the given HighFunction
-	 * @return true if there is a difference (and a full commit is required)
-	 */
-	protected static boolean checkFullCommit(HighSymbol highSymbol, HighFunction hfunction) {
-		if (highSymbol != null && !highSymbol.isParameter()) {
-			return false;
-		}
-		Function function = hfunction.getFunction();
-		Parameter[] parameters = function.getParameters();
-		LocalSymbolMap localSymbolMap = hfunction.getLocalSymbolMap();
-		int numParams = localSymbolMap.getNumParams();
-		if (numParams != parameters.length) {
-			return true;
-		}
+     * Compare the given HighFunction's idea of the prototype with the Function's idea.
+     * Return true if there is a difference. If a specific symbol is being changed,
+     * it can be passed in to check whether or not the prototype is being affected.
+     * @param highSymbol (if not null) is the symbol being modified
+     * @param hfunction is the given HighFunction
+     * @return true if there is a difference (and a full commit is required)
+     */
+    protected static boolean checkFullCommit(HighSymbol highSymbol, HighFunction hfunction) {
+        if (highSymbol != null && !highSymbol.isParameter()) {
+            return false;
+        }
+        Function function = hfunction.getFunction();
+        Parameter[] parameters = function.getParameters();
+        LocalSymbolMap localSymbolMap = hfunction.getLocalSymbolMap();
+        int numParams = localSymbolMap.getNumParams();
+        if (numParams != parameters.length) {
+            return true;
+        }
 
-		for (int i = 0; i < numParams; i++) {
-			HighSymbol param = localSymbolMap.getParamSymbol(i);
-			if (param.getCategoryIndex() != i) {
-				return true;
-			}
-			VariableStorage storage = param.getStorage();
-			// Don't compare using the equals method so that DynamicVariableStorage can match
-			if (0 != storage.compareTo(parameters[i].getVariableStorage())) {
-				return true;
-			}
-		}
+        for (int i = 0; i < numParams; i++) {
+            HighSymbol param = localSymbolMap.getParamSymbol(i);
+            if (param.getCategoryIndex() != i) {
+                return true;
+            }
+            VariableStorage storage = param.getStorage();
+            // Don't compare using the equals method so that DynamicVariableStorage can match
+            if (0 != storage.compareTo(parameters[i].getVariableStorage())) {
+                return true;
+            }
+        }
 
-		return false;
-	}
+        return false;
+    }
 
     // ----------------------------------------------------------------------------------
     // New methods to implement the new functionalities
@@ -999,7 +1010,7 @@ public class GhidraMCPPlugin extends Plugin {
     /**
      * Helper method that applies the function prototype within a transaction
      */
-    private void applyFunctionPrototype(Program program, String functionAddrStr, String prototype, 
+    private void applyFunctionPrototype(Program program, String functionAddrStr, String prototype,
                                        AtomicBoolean success, StringBuilder errorMessage) {
         try {
             // Get the address and function
@@ -1352,9 +1363,9 @@ public class GhidraMCPPlugin extends Plugin {
         }
     }
 
-/**
- * List all defined strings in the program with their addresses
- */
+    /**
+     * List all defined strings in the program with their addresses
+     */
     private String listDefinedStrings(int offset, int limit, String filter) {
         Program program = getCurrentProgram();
         if (program == null) return "No program loaded";
@@ -1376,6 +1387,39 @@ public class GhidraMCPPlugin extends Plugin {
         }
         
         return paginateList(lines, offset, limit);
+    }
+
+    /**
+     * Search strings by content with pagination
+     */
+    private String searchStringsByContent(String searchTerm, int offset, int limit) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (searchTerm == null || searchTerm.isEmpty()) return "Search term is required";
+
+        List<String> matches = new ArrayList<>();
+        DataIterator dataIt = program.getListing().getDefinedData(true);
+        
+        while (dataIt.hasNext()) {
+            Data data = dataIt.next();
+            
+            if (data != null && isStringData(data)) {
+                String value = data.getValue() != null ? data.getValue().toString() : "";
+                
+                if (value.toLowerCase().contains(searchTerm.toLowerCase())) {
+                    String escapedValue = escapeString(value);
+                    matches.add(String.format("%s: \"%s\"", data.getAddress(), escapedValue));
+                }
+            }
+        }
+        
+        Collections.sort(matches);
+        
+        if (matches.isEmpty()) {
+            return "No strings matching '" + searchTerm + "'";
+        }
+        
+        return paginateList(matches, offset, limit);
     }
 
     /**
