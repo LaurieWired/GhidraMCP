@@ -69,6 +69,50 @@
       <systemPath>${project.basedir}/lib/Gui.jar</systemPath>
     </dependency>
 
+    <!-- BSim dependencies -->
+    <dependency>
+      <groupId>ghidra</groupId>
+      <artifactId>BSim</artifactId>
+      <version>11.3.2</version>
+      <scope>system</scope>
+      <systemPath>${project.basedir}/lib/BSim.jar</systemPath>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-dbcp2</artifactId>
+      <version>2.9.0</version>
+      <scope>system</scope>
+      <systemPath>${project.basedir}/lib/commons-dbcp2-2.9.0.jar</systemPath>
+    </dependency>
+    <dependency>
+      <groupId>commons-logging</groupId>
+      <artifactId>commons-logging</artifactId>
+      <version>1.2</version>
+      <scope>system</scope>
+      <systemPath>${project.basedir}/lib/commons-logging-1.2.jar</systemPath>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-pool2</artifactId>
+      <version>2.11.1</version>
+      <scope>system</scope>
+      <systemPath>${project.basedir}/lib/commons-pool2-2.11.1.jar</systemPath>
+    </dependency>
+    <dependency>
+      <groupId>com.h2database</groupId>
+      <artifactId>h2</artifactId>
+      <version>2.2.220</version>
+      <scope>system</scope>
+      <systemPath>${project.basedir}/lib/h2-2.2.220.jar</systemPath>
+    </dependency>
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <version>42.7.6</version>
+      <scope>system</scope>
+      <systemPath>${project.basedir}/lib/postgresql-42.7.6.jar</systemPath>
+    </dependency>
+
     <!-- JUnit (test only) -->
     <dependency>
       <groupId>junit</groupId>

@@ -48,6 +48,15 @@ import ghidra.framework.options.Options;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
+// BSim imports
+import ghidra.features.bsim.query.FunctionDatabase;
+import ghidra.features.bsim.query.BSimServerInfo;
+import ghidra.features.bsim.query.BSimClientFactory;
+import ghidra.features.bsim.query.GenSignatures;
+import ghidra.features.bsim.query.description.*;
+import ghidra.features.bsim.query.protocol.*;
+import generic.lsh.vector.LSHVectorFactory;
+
 import javax.swing.SwingUtilities;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -71,6 +80,10 @@ public class GhidraMCPPlugin extends Plugin {
     private static final String OPTION_CATEGORY_NAME = "GhidraMCP HTTP Server";
     private static final String PORT_OPTION_NAME = "Server Port";
     private static final int DEFAULT_PORT = 8080;
+
+    // BSim database connection state
+    private FunctionDatabase bsimDatabase = null;
+    private String currentBSimDatabasePath = null;
 
     public GhidraMCPPlugin(PluginTool tool) {
         super(tool);
@@ -339,6 +352,62 @@ public class GhidraMCPPlugin extends Plugin {
             int limit = parseIntOrDefault(qparams.get("limit"), 100);
             String filter = qparams.get("filter");
             sendResponse(exchange, listDefinedStrings(offset, limit, filter));
+        });
+
+        // BSim endpoints
+        server.createContext("/bsim/select_database", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String dbPath = params.get("database_path");
+            sendResponse(exchange, selectBSimDatabase(dbPath));
+        });
+
+        server.createContext("/bsim/query_function", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String functionAddress = params.get("function_address");
+            int maxMatches = parseIntOrDefault(params.get("max_matches"), 10);
+            double similarityThreshold = parseDoubleOrDefault(params.get("similarity_threshold"), "0.7");
+            double confidenceThreshold = parseDoubleOrDefault(params.get("confidence_threshold"), "0.0");
+            double maxSimilarity = parseDoubleOrDefault(params.get("max_similarity"), String.valueOf(Double.POSITIVE_INFINITY));
+            double maxConfidence = parseDoubleOrDefault(params.get("max_confidence"), String.valueOf(Double.POSITIVE_INFINITY));
+            int offset = parseIntOrDefault(params.get("offset"), 0);
+            int limit = parseIntOrDefault(params.get("limit"), 100);
+            sendResponse(exchange, queryBSimFunction(functionAddress, maxMatches, similarityThreshold, confidenceThreshold, maxSimilarity, maxConfidence, offset, limit));
+        });
+
+        server.createContext("/bsim/query_all_functions", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            int maxMatchesPerFunction = parseIntOrDefault(params.get("max_matches_per_function"), 5);
+            double similarityThreshold = parseDoubleOrDefault(params.get("similarity_threshold"), "0.7");
+            double confidenceThreshold = parseDoubleOrDefault(params.get("confidence_threshold"), "0.0");
+            double maxSimilarity = parseDoubleOrDefault(params.get("max_similarity"), String.valueOf(Double.POSITIVE_INFINITY));
+            double maxConfidence = parseDoubleOrDefault(params.get("max_confidence"), String.valueOf(Double.POSITIVE_INFINITY));
+            int offset = parseIntOrDefault(params.get("offset"), 0);
+            int limit = parseIntOrDefault(params.get("limit"), 100);
+            sendResponse(exchange, queryAllBSimFunctions(maxMatchesPerFunction, similarityThreshold, confidenceThreshold, maxSimilarity, maxConfidence, offset, limit));
+        });
+
+        server.createContext("/bsim/disconnect", exchange -> {
+            sendResponse(exchange, disconnectBSimDatabase());
+        });
+
+        server.createContext("/bsim/status", exchange -> {
+            sendResponse(exchange, getBSimStatus());
+        });
+
+        server.createContext("/bsim/get_match_disassembly", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String executablePath = params.get("executable_path");
+            String functionName = params.get("function_name");
+            String functionAddress = params.get("function_address");
+            sendResponse(exchange, getBSimMatchDisassembly(executablePath, functionName, functionAddress));
+        });
+
+        server.createContext("/bsim/get_match_decompile", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String executablePath = params.get("executable_path");
+            String functionName = params.get("function_name");
+            String functionAddress = params.get("function_address");
+            sendResponse(exchange, getBSimMatchDecompile(executablePath, functionName, functionAddress));
         });
 
         server.setExecutor(null);
@@ -804,12 +873,9 @@ public class GhidraMCPPlugin extends Plugin {
             Function func = getFunctionForAddress(program, addr);
             if (func == null) return "No function found at or containing address " + addressStr;
 
-            DecompInterface decomp = new DecompInterface();
-            decomp.openProgram(program);
-            DecompileResults result = decomp.decompileFunction(func, 30, new ConsoleTaskMonitor());
-
-            return (result != null && result.decompileCompleted()) 
-                ? result.getDecompiledFunction().getC() 
+            String decompCode = decompileFunctionInProgram(func, program);
+            return (decompCode != null && !decompCode.isEmpty()) 
+                ? decompCode 
                 : "Decompilation failed";
         } catch (Exception e) {
             return "Error decompiling function: " + e.getMessage();
@@ -829,27 +895,7 @@ public class GhidraMCPPlugin extends Plugin {
             Function func = getFunctionForAddress(program, addr);
             if (func == null) return "No function found at or containing address " + addressStr;
 
-            StringBuilder result = new StringBuilder();
-            Listing listing = program.getListing();
-            Address start = func.getEntryPoint();
-            Address end = func.getBody().getMaxAddress();
-
-            InstructionIterator instructions = listing.getInstructions(start, true);
-            while (instructions.hasNext()) {
-                Instruction instr = instructions.next();
-                if (instr.getAddress().compareTo(end) > 0) {
-                    break; // Stop if we've gone past the end of the function
-                }
-                String comment = listing.getComment(CodeUnit.EOL_COMMENT, instr.getAddress());
-                comment = (comment != null) ? "; " + comment : "";
-
-                result.append(String.format("%s: %s %s\n", 
-                    instr.getAddress(), 
-                    instr.toString(),
-                    comment));
-            }
-
-            return result.toString();
+            return disassembleFunctionInProgram(func, program);
         } catch (Exception e) {
             return "Error disassembling function: " + e.getMessage();
         }
@@ -1607,6 +1653,24 @@ public class GhidraMCPPlugin extends Plugin {
     }
 
     /**
+     * Parse a double from a string, or return defaultValue if null/invalid.
+     */
+    private double parseDoubleOrDefault(String val, String defaultValue) {
+        if (val == null) val = defaultValue;
+        try {
+            return Double.parseDouble(val);
+        }
+        catch (NumberFormatException e) {
+            try {
+                return Double.parseDouble(defaultValue);
+            }
+            catch (NumberFormatException e2) {
+                return 0.0;
+            }
+        }
+    }
+
+    /**
      * Escape non-ASCII chars to avoid potential decode issues.
      */
     private String escapeNonAscii(String input) {
@@ -1622,6 +1686,711 @@ public class GhidraMCPPlugin extends Plugin {
             }
         }
         return sb.toString();
+    }
+
+    // ----------------------------------------------------------------------------------
+    // BSim functionality
+    // ----------------------------------------------------------------------------------
+
+    /**
+     * Select and connect to a BSim database
+     */
+    private String selectBSimDatabase(String databasePath) {
+        if (databasePath == null || databasePath.isEmpty()) {
+            return "Error: Database path is required";
+        }
+
+        try {
+            // Disconnect from any existing database first
+            if (bsimDatabase != null) {
+                disconnectBSimDatabase();
+            }
+
+            // Create BSimServerInfo from the path/URL
+            // Use URL constructor for URLs (postgresql://, file://, etc.)
+            // Use String constructor only for file paths
+            BSimServerInfo serverInfo;
+            if (databasePath.contains("://")) {
+                // It's a URL - use URL constructor
+                serverInfo = new BSimServerInfo(new java.net.URL(databasePath));
+            } else {
+                // It's a file path - use String constructor
+                serverInfo = new BSimServerInfo(databasePath);
+            }
+            
+            // Initialize the database connection
+            bsimDatabase = BSimClientFactory.buildClient(serverInfo, false);
+            
+            if (bsimDatabase == null) {
+                return "Error: Failed to create BSim database client";
+            }
+
+            // Try to initialize the connection
+            if (!bsimDatabase.initialize()) {
+                bsimDatabase = null;
+                return "Error: Failed to initialize BSim database connection";
+            }
+
+            currentBSimDatabasePath = databasePath;
+            return "Successfully connected to BSim database: " + databasePath;
+
+        } catch (Exception e) {
+            bsimDatabase = null;
+            currentBSimDatabasePath = null;
+            return "Error connecting to BSim database: " + e.getMessage();
+        }
+    }
+
+    /**
+     * Disconnect from the current BSim database
+     */
+    private String disconnectBSimDatabase() {
+        if (bsimDatabase != null) {
+            try {
+                bsimDatabase.close();
+                bsimDatabase = null;
+                String path = currentBSimDatabasePath;
+                currentBSimDatabasePath = null;
+                return "Disconnected from BSim database: " + path;
+            } catch (Exception e) {
+                return "Error disconnecting from BSim database: " + e.getMessage();
+            }
+        }
+        return "No BSim database connection to disconnect";
+    }
+
+    /**
+     * Get the current BSim database connection status
+     */
+    private String getBSimStatus() {
+        if (bsimDatabase != null && currentBSimDatabasePath != null) {
+            try {
+                StringBuilder status = new StringBuilder();
+                status.append("Connected to: ").append(currentBSimDatabasePath).append("\n");
+                status.append("Database info:\n");
+                
+                LSHVectorFactory vectorFactory = bsimDatabase.getLSHVectorFactory();
+                if (vectorFactory != null) {
+                    status.append("  Vector Factory: ").append(vectorFactory.getClass().getSimpleName()).append("\n");
+                } else {
+                    status.append("  Vector Factory: null (ERROR)\n");
+                }
+                
+                // Try to get database info
+                QueryInfo infoQuery = new QueryInfo();
+                ResponseInfo infoResponse = infoQuery.execute(bsimDatabase);
+                if (infoResponse != null && infoResponse.info != null) {
+                    status.append("  Database name: ").append(infoResponse.info.databasename).append("\n");
+                }
+                
+                return status.toString();
+            } catch (Exception e) {
+                return "Connected to: " + currentBSimDatabasePath + " (Error getting details: " + e.getMessage() + ")";
+            }
+        }
+        return "Not connected to any BSim database";
+    }
+
+    /**
+     * Query a single function against the BSim database
+     * 
+     * @param functionAddress Address of the function to query
+     * @param maxMatches Maximum number of matches to return
+     * @param similarityThreshold Minimum similarity score (inclusive, 0.0-1.0)
+     * @param confidenceThreshold Minimum confidence score (inclusive, 0.0-1.0)
+     * @param maxSimilarity Maximum similarity score (exclusive, 0.0-1.0, default: unbounded/infinity)
+     * @param maxConfidence Maximum confidence score (exclusive, 0.0-1.0, default: unbounded/infinity)
+     * @param offset Pagination offset
+     * @param limit Maximum number of results to return
+     */
+    private String queryBSimFunction(String functionAddress, int maxMatches, 
+                                     double similarityThreshold, double confidenceThreshold,
+                                     double maxSimilarity, double maxConfidence,
+                                     int offset, int limit) {
+        if (bsimDatabase == null) {
+            return "Error: Not connected to a BSim database. Use bsim_select_database first.";
+        }
+
+        Program program = getCurrentProgram();
+        if (program == null) {
+            return "Error: No program loaded";
+        }
+
+        try {
+            Address addr = program.getAddressFactory().getAddress(functionAddress);
+            Function func = program.getFunctionManager().getFunctionAt(addr);
+            if (func == null) {
+                func = program.getFunctionManager().getFunctionContaining(addr);
+            }
+            if (func == null) {
+                return "Error: No function found at address " + functionAddress;
+            }
+
+            // Generate signature for this function
+            GenSignatures gensig = new GenSignatures(false);
+            gensig.setVectorFactory(bsimDatabase.getLSHVectorFactory());
+            
+            // Set up the executable record for the current program
+            String exeName = program.getName();
+            String exePath = program.getExecutablePath();
+            gensig.openProgram(program, exeName, exePath, null, null, null);
+            
+            DescriptionManager descManager = gensig.getDescriptionManager();
+            gensig.scanFunction(func);
+
+            if (descManager.numFunctions() == 0) {
+                return "Error: Failed to generate signature for function";
+            }
+
+            // Create and execute query
+            // Note: We don't set query.max here because we need to filter by max similarity/confidence first,
+            // then limit to maxMatches. Setting query.max too early might exclude valid matches.
+            QueryNearest query = new QueryNearest();
+            query.manage = descManager;
+            query.max = Integer.MAX_VALUE; // Get all potential matches
+            query.thresh = similarityThreshold;
+            query.signifthresh = confidenceThreshold;
+
+            // Execute query
+            ResponseNearest response = query.execute(bsimDatabase);
+            
+            if (response == null) {
+                return "Error: Query returned no response";
+            }
+
+            // Debug info
+            Msg.info(this, String.format("Query completed for %s: threshold=%.2f, results=%d", 
+                func.getName(), similarityThreshold,
+                response.result != null ? response.result.size() : 0));
+
+            // Filter results by max similarity and max confidence, and limit to maxMatches
+            filterBSimResults(response, maxSimilarity, maxConfidence, maxMatches);
+
+            // Format results with pagination
+            return formatBSimResults(response, func.getName(), offset, limit);
+
+        } catch (Exception e) {
+            return "Error querying BSim database: " + e.getMessage();
+        }
+    }
+
+    /**
+     * Query all functions in the current program against the BSim database
+     * 
+     * @param maxMatchesPerFunction Maximum number of matches per function
+     * @param similarityThreshold Minimum similarity score (inclusive, 0.0-1.0)
+     * @param confidenceThreshold Minimum confidence score (inclusive, 0.0-1.0)
+     * @param maxSimilarity Maximum similarity score (exclusive, 0.0-1.0, default: unbounded/infinity)
+     * @param maxConfidence Maximum confidence score (exclusive, 0.0-1.0, default: unbounded/infinity)
+     * @param offset Pagination offset
+     * @param limit Maximum number of results to return
+     */
+    private String queryAllBSimFunctions(int maxMatchesPerFunction, 
+                                        double similarityThreshold, double confidenceThreshold,
+                                        double maxSimilarity, double maxConfidence,
+                                        int offset, int limit) {
+        if (bsimDatabase == null) {
+            return "Error: Not connected to a BSim database. Use bsim_select_database first.";
+        }
+
+        Program program = getCurrentProgram();
+        if (program == null) {
+            return "Error: No program loaded";
+        }
+
+        try {
+            StringBuilder results = new StringBuilder();
+            FunctionManager funcManager = program.getFunctionManager();
+            int totalFunctions = funcManager.getFunctionCount();
+            int queriedFunctions = 0;
+
+            results.append("Querying ").append(totalFunctions).append(" functions against BSim database...\n\n");
+
+            // Generate signatures for all functions
+            GenSignatures gensig = new GenSignatures(false);
+            gensig.setVectorFactory(bsimDatabase.getLSHVectorFactory());
+            
+            // Set up the executable record for the current program
+            String exeName = program.getName();
+            String exePath = program.getExecutablePath();
+            gensig.openProgram(program, exeName, exePath, null, null, null);
+            
+            DescriptionManager descManager = gensig.getDescriptionManager();
+
+            // Use built-in scanFunctions to scan all at once
+            try {
+                gensig.scanFunctions(funcManager.getFunctions(true), 30, new ConsoleTaskMonitor());
+                queriedFunctions = descManager.numFunctions();
+            } catch (Exception e) {
+                return "Error: Failed to generate signatures: " + e.getMessage();
+            }
+
+            if (queriedFunctions == 0) {
+                return "Error: No function signatures were generated";
+            }
+
+            // Create query
+            // Note: We don't set query.max here because we need to filter by max similarity/confidence first,
+            // then limit to maxMatchesPerFunction. Setting query.max too early might exclude valid matches.
+            QueryNearest query = new QueryNearest();
+            query.manage = descManager;
+            query.max = Integer.MAX_VALUE; // Get all potential matches
+            query.thresh = similarityThreshold;
+            query.signifthresh = confidenceThreshold;
+
+            // Execute query
+            ResponseNearest response = query.execute(bsimDatabase);
+            
+            if (response == null) {
+                return "Error: Query returned no response";
+            }
+
+            // Filter results by max similarity and max confidence, and limit to maxMatchesPerFunction
+            filterBSimResults(response, maxSimilarity, maxConfidence, maxMatchesPerFunction);
+
+            results.append("Successfully queried ").append(queriedFunctions).append(" functions\n");
+
+            // Format detailed results with pagination
+            results.append(formatBSimResults(response, null, offset, limit));
+
+            return results.toString();
+
+        } catch (Exception e) {
+            return "Error querying all functions: " + e.getMessage();
+        }
+    }
+
+    /**
+     * Get detailed information about a BSim match from a program in the Ghidra project.
+     * Falls back gracefully if the program is not found in the project.
+     */
+    /**
+     * Get the disassembly of a BSim match from a program in the Ghidra project.
+     */
+    private String getBSimMatchDisassembly(String executablePath, String functionName, String functionAddress) {
+        return getBSimMatchFunction(executablePath, functionName, functionAddress, true, false);
+    }
+
+    /**
+     * Get the decompilation of a BSim match from a program in the Ghidra project.
+     */
+    private String getBSimMatchDecompile(String executablePath, String functionName, String functionAddress) {
+        return getBSimMatchFunction(executablePath, functionName, functionAddress, false, true);
+    }
+
+    /**
+     * Get function details for a BSim match from a program in the Ghidra project.
+     * Falls back gracefully if the program is not found in the project.
+     */
+    private String getBSimMatchFunction(String executablePath, String functionName, String functionAddress,
+                                        boolean includeDisassembly, boolean includeDecompile) {
+        // Input validation
+        if (executablePath == null || executablePath.isEmpty()) {
+            return "Error: Executable path is required";
+        }
+        if (functionName == null || functionName.isEmpty()) {
+            return "Error: Function name is required";
+        }
+        if (functionAddress == null || functionAddress.isEmpty()) {
+            return "Error: Function address is required";
+        }
+
+        StringBuilder result = new StringBuilder();
+        result.append("Match Details\n");
+        result.append("=============\n");
+        result.append(String.format("Executable: %s\n", executablePath));
+        result.append(String.format("Function: %s\n", functionName));
+        result.append(String.format("Address: %s\n\n", functionAddress));
+
+        ProgramManager pm = tool.getService(ProgramManager.class);
+        if (pm == null) {
+            result.append("ERROR: ProgramManager service not available\n");
+            return result.toString();
+        }
+
+        String fileName = new java.io.File(executablePath).getName();
+        Program matchedProgram = null;
+        boolean needsRelease = false;
+
+        // Strategy 1: Check all open programs
+        Program[] openPrograms = pm.getAllOpenPrograms();
+        for (Program program : openPrograms) {
+            if (executablePath.equals(program.getExecutablePath()) || fileName.equals(program.getName())) {
+                matchedProgram = program;
+                needsRelease = false;
+                break;
+            }
+        }
+
+        // Strategy 2: Try to find in project but not currently open
+        if (matchedProgram == null) {
+            ghidra.framework.model.Project project = tool.getProject();
+            if (project != null) {
+                ghidra.framework.model.DomainFile domainFile = findDomainFileRecursive(
+                    project.getProjectData().getRootFolder(), fileName);
+                
+                if (domainFile != null) {
+                    try {
+                        ghidra.framework.model.DomainObject domainObject = 
+                            domainFile.getDomainObject(this, false, false, new ConsoleTaskMonitor());
+                        if (domainObject instanceof Program) {
+                            matchedProgram = (Program) domainObject;
+                            needsRelease = true;
+                        }
+                    } catch (Exception e) {
+                        Msg.error(this, "Failed to open program from project: " + fileName, e);
+                    }
+                }
+            }
+        }
+
+        if (matchedProgram == null) {
+            result.append("ERROR: Program not found in Ghidra project\n");
+            result.append("The matched executable is not in the current project.\n");
+            result.append("\nTo view match details, please import the program into Ghidra:\n");
+            result.append("  ").append(executablePath).append("\n");
+            return result.toString();
+        }
+
+        try {
+            // Find the function
+            Address addr = matchedProgram.getAddressFactory().getAddress(functionAddress);
+            Function func = matchedProgram.getFunctionManager().getFunctionAt(addr);
+            
+            if (func == null) {
+                func = matchedProgram.getFunctionManager().getFunctionContaining(addr);
+            }
+            
+            if (func == null) {
+                result.append("ERROR: Function not found at address ").append(functionAddress).append("\n");
+                return result.toString();
+            }
+
+            // Get function prototype
+            result.append("Function Prototype:\n");
+            result.append("-------------------\n");
+            result.append(func.getSignature()).append("\n\n");
+
+            // Get decompilation if requested
+            if (includeDecompile) {
+                result.append("Decompilation:\n");
+                result.append("--------------\n");
+                String decompCode = decompileFunctionInProgram(func, matchedProgram);
+                if (decompCode != null && !decompCode.isEmpty()) {
+                    result.append(decompCode).append("\n");
+                } else {
+                    result.append("(Decompilation not available)\n");
+                }
+            }
+
+            // Get assembly if requested
+            if (includeDisassembly) {
+                if (includeDecompile) {
+                    result.append("\n");
+                }
+                result.append("Assembly:\n");
+                result.append("---------\n");
+                String asmCode = disassembleFunctionInProgram(func, matchedProgram);
+                if (asmCode != null && !asmCode.isEmpty()) {
+                    result.append(asmCode);
+                } else {
+                    result.append("(Assembly not available)\n");
+                }
+            }
+
+            return result.toString();
+
+        } catch (Exception e) {
+            result.append("ERROR: Exception while processing program: ").append(e.getMessage()).append("\n");
+            Msg.error(this, "Error getting BSim match function", e);
+            return result.toString();
+        } finally {
+            // Release the program if we opened it from the project
+            if (needsRelease && matchedProgram != null) {
+                matchedProgram.release(this);
+            }
+        }
+    }
+
+    /**
+     * Recursively search for a domain file by name in a folder and its subfolders
+     */
+    private ghidra.framework.model.DomainFile findDomainFileRecursive(
+            ghidra.framework.model.DomainFolder folder, String fileName) {
+        
+        // Check files in current folder
+        for (ghidra.framework.model.DomainFile file : folder.getFiles()) {
+            if (fileName.equals(file.getName())) {
+                return file;
+            }
+        }
+        
+        // Recursively check subfolders
+        for (ghidra.framework.model.DomainFolder subfolder : folder.getFolders()) {
+            ghidra.framework.model.DomainFile result = findDomainFileRecursive(subfolder, fileName);
+            if (result != null) {
+                return result;
+            }
+        }
+        
+        return null;
+    }
+
+    /**
+     * Decompile a function within a specific program
+     */
+    private String decompileFunctionInProgram(Function func, Program program) {
+        try {
+            DecompInterface decomp = new DecompInterface();
+            decomp.openProgram(program);
+            DecompileResults result = decomp.decompileFunction(func, 30, new ConsoleTaskMonitor());
+            
+            if (result != null && result.decompileCompleted()) {
+                return result.getDecompiledFunction().getC();
+            }
+        } catch (Exception e) {
+            Msg.error(this, "Error decompiling function in external program", e);
+        }
+        return null;
+    }
+
+    /**
+     * Disassemble a function within a specific program
+     */
+    private String disassembleFunctionInProgram(Function func, Program program) {
+        try {
+            StringBuilder result = new StringBuilder();
+            Listing listing = program.getListing();
+            Address start = func.getEntryPoint();
+            Address end = func.getBody().getMaxAddress();
+
+            InstructionIterator instructions = listing.getInstructions(start, true);
+            while (instructions.hasNext()) {
+                Instruction instr = instructions.next();
+                if (instr.getAddress().compareTo(end) > 0) {
+                    break;
+                }
+                String comment = listing.getComment(CodeUnit.EOL_COMMENT, instr.getAddress());
+                comment = (comment != null) ? "; " + comment : "";
+
+                result.append(String.format("%s: %s %s\n", 
+                    instr.getAddress(), 
+                    instr.toString(),
+                    comment));
+            }
+            return result.toString();
+        } catch (Exception e) {
+            Msg.error(this, "Error disassembling function in external program", e);
+        }
+        return null;
+    }
+
+    /**
+     * Filter BSim results by maximum similarity and confidence thresholds, and limit matches.
+     * Removes matches that exceed the specified maximum values, and limits the number of 
+     * matches per function. Implements early stopping for efficiency.
+     * 
+     * Note: Maximum thresholds are exclusive (values >= max are filtered out),
+     * while minimum thresholds (applied in the query) are inclusive.
+     * 
+     * @param response The BSim query response to filter
+     * @param maxSimilarity Maximum similarity score (exclusive) - matches >= this value are removed
+     * @param maxConfidence Maximum confidence score (exclusive) - matches >= this value are removed
+     * @param maxMatches Maximum number of matches to keep per function (for early stopping)
+     */
+    private void filterBSimResults(ResponseNearest response, double maxSimilarity, double maxConfidence, int maxMatches) {
+        if (response == null || response.result == null) {
+            return;
+        }
+
+        Iterator<SimilarityResult> iter = response.result.iterator();
+        while (iter.hasNext()) {
+            SimilarityResult simResult = iter.next();
+            Iterator<SimilarityNote> noteIter = simResult.iterator();
+            
+            int validMatchCount = 0;
+            
+            while (noteIter.hasNext()) {
+                SimilarityNote note = noteIter.next();
+                
+                // Remove matches that meet or exceed max similarity or max confidence (exclusive)
+                if (note.getSimilarity() >= maxSimilarity || note.getSignificance() >= maxConfidence) {
+                    noteIter.remove();
+                } else {
+                    // This is a valid match
+                    validMatchCount++;
+                    
+                    // Early stopping: if we've reached maxMatches valid matches, remove all remaining
+                    if (validMatchCount > maxMatches) {
+                        noteIter.remove();
+                    }
+                }
+            }
+        }
+    }
+    
+    private Address getAddressFromLong(long address) {
+        Program program = getCurrentProgram();
+        String hexAddr = Long.toHexString(address);
+        return program.getAddressFactory().getAddress(hexAddr);
+    }
+
+    /**
+     * Format BSim query results into a readable string with pagination
+     */
+    private String formatBSimResults(ResponseNearest response, String queryFunctionName, int offset, int limit) {
+        StringBuilder result = new StringBuilder();
+        
+        if (queryFunctionName != null) {
+            result.append("Matches for function: ").append(queryFunctionName).append("\n\n");
+        }
+
+        Iterator<SimilarityResult> iter = response.result.iterator();
+        int totalMatchCount = 0;
+        int displayedMatchCount = 0;
+
+        while (iter.hasNext()) {
+            SimilarityResult simResult = iter.next();
+            FunctionDescription base = simResult.getBase();
+            
+            if (simResult.size() == 0) {
+                if (queryFunctionName == null) {
+                    continue; // Skip functions with no matches when querying all
+                }
+                result.append("No matches found (all matches filtered out or none available)\n");
+                return result.toString(); // Early return for single function with no matches
+            }
+
+            // For single function query, paginate the matches
+            // For all functions query, paginate the functions
+            if (queryFunctionName != null) {
+                // Single function: paginate through similarity matches
+                int totalMatches = simResult.size();
+                
+                Iterator<SimilarityNote> noteIter = simResult.iterator();
+                int matchIndex = 0;
+                
+                while (noteIter.hasNext()) {
+                    SimilarityNote note = noteIter.next();
+                    
+                    // Skip matches before offset
+                    if (matchIndex < offset) {
+                        matchIndex++;
+                        continue;
+                    }
+                    
+                    // Stop if we've reached the limit
+                    if (displayedMatchCount >= limit) {
+                        break;
+                    }
+                    
+                    FunctionDescription match = note.getFunctionDescription();
+                    ExecutableRecord exe = match.getExecutableRecord();
+
+                    result.append(String.format("Match %d:\n", matchIndex + 1));
+                    
+                    if (exe != null) {
+                        result.append(String.format("  Executable: %s\n", exe.getNameExec()));
+                    }
+                    
+                    result.append(String.format("  Function: %s\n", match.getFunctionName()));
+                    result.append(String.format("  Address: %s\n", getAddressFromLong(match.getAddress())));
+                    result.append(String.format("  Similarity: %.4f\n", note.getSimilarity()));
+                    result.append(String.format("  Confidence: %.4f\n", note.getSignificance()));
+                    
+                    if (exe != null) {
+                        String arch = exe.getArchitecture();
+                        String compiler = exe.getNameCompiler();
+                        if (arch != null && !arch.isEmpty()) {
+                            result.append(String.format("  Architecture: %s\n", arch));
+                        }
+                        if (compiler != null && !compiler.isEmpty()) {
+                            result.append(String.format("  Compiler: %s\n", compiler));
+                        }
+                    }
+                    
+                    result.append("\n");
+                    matchIndex++;
+                    displayedMatchCount++;
+                }
+                
+                // Add pagination info for single function
+                int remaining = totalMatches - offset - displayedMatchCount;
+                if (remaining < 0) remaining = 0;
+                
+                result.append(String.format("Showing matches %d-%d of %d", 
+                    offset + 1, offset + displayedMatchCount, totalMatches));
+                if (remaining > 0) {
+                    result.append(String.format(" (%d more available)\n", remaining));
+                } else {
+                    result.append("\n");
+                }
+            } else {                
+                // All functions query: paginate by function (skip if before offset)
+                if (totalMatchCount < offset) {
+                    totalMatchCount++;
+                    continue;
+                }
+                
+                result.append("Function: ").append(base.getFunctionName())
+                        .append(" at ").append(getAddressFromLong(base.getAddress())).append("\n");
+            
+                // Stop if we've reached the limit
+                if (displayedMatchCount >= limit) {
+                    break;
+                }
+                
+                result.append("Found ").append(simResult.size()).append(" match(es):\n");
+
+                Iterator<SimilarityNote> noteIter = simResult.iterator();
+                int matchNum = 1;
+                while (noteIter.hasNext()) {
+                    SimilarityNote note = noteIter.next();
+                    FunctionDescription match = note.getFunctionDescription();
+                    ExecutableRecord exe = match.getExecutableRecord();
+
+                    result.append(String.format("Match %d:\n", matchNum));
+                    
+                    result.append(String.format("  Executable: %s\n", exe.getNameExec()));
+                    result.append(String.format("  Function: %s\n", match.getFunctionName()));
+                    result.append(String.format("  Address: %s\n", getAddressFromLong(match.getAddress())));
+                    result.append(String.format("  Similarity: %.4f\n", note.getSimilarity()));
+                    result.append(String.format("  Confidence: %.4f\n", note.getSignificance()));
+                    
+                    result.append("\n");
+                    matchNum++;
+                }
+                result.append("\n");
+                totalMatchCount++;
+                displayedMatchCount++;
+            }
+        }
+
+        // Add pagination info for all functions query
+        if (queryFunctionName == null) {
+            // Count remaining functions
+            int remaining = 0;
+            while (iter.hasNext()) {
+                SimilarityResult simResult = iter.next();
+                if (simResult.size() > 0) {
+                    remaining++;
+                }
+            }
+            
+            if (displayedMatchCount == 0) {
+                result.append("No matches found for any functions\n");
+            } else {
+                result.append(String.format("Showing functions %d-%d of %d+ results", 
+                    offset + 1, offset + displayedMatchCount, offset + displayedMatchCount + remaining));
+                if (remaining > 0) {
+                    result.append(String.format(" (%d more available)\n", remaining));
+                } else {
+                    result.append("\n");
+                }
+            }
+        }
+
+        return result.toString();
     }
 
     public Program getCurrentProgram() {

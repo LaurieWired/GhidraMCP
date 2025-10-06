@@ -20,6 +20,11 @@ MCP Server + Ghidra Plugin
 - Decompile and analyze binaries in Ghidra
 - Automatically rename methods and data
 - List methods, classes, imports, and exports
+- BSim integration for function similarity matching
+  - Connect to BSim databases (H2, PostgreSQL)
+  - Query individual functions for similar matches
+  - Batch query all functions in a program
+  - View similarity scores, confidence levels, and executable metadata
 
 # Installation
 
@@ -108,6 +113,13 @@ Another MCP client that supports multiple models on the backend is [5ire](https:
 - `Ghidra/Framework/SoftwareModeling/lib/SoftwareModeling.jar`
 - `Ghidra/Framework/Utility/lib/Utility.jar`
 - `Ghidra/Framework/Gui/lib/Gui.jar`
+- `Ghidra/Features/BSim/lib/BSim.jar lib/BSim.jar`
+- `Ghidra/Features/BSim/lib/commons-dbcp2-2.9.0.jar lib/commons-dbcp2-2.9.0.jar`
+- `Ghidra/Features/BSim/lib/commons-logging-1.2.jar lib/commons-logging-1.2.jar`
+- `Ghidra/Features/BSim/lib/commons-pool2-2.11.1.jar lib/commons-pool2-2.11.1.jar`
+- `Ghidra/Features/BSim/lib/h2-2.2.220.jar lib/h2-2.2.220.jar`
+- `Ghidra/Features/BSim/lib/postgresql-42.7.6.jar lib/postgresql-42.7.6.jar`
+
 2. Build with Maven by running:
 
 `mvn clean package assembly:single`
