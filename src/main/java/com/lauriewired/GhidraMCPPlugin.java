@@ -1,54 +1,32 @@
 package com.lauriewired;
 
-import ghidra.framework.plugintool.Plugin;
-import ghidra.framework.plugintool.PluginTool;
-import ghidra.program.model.address.Address;
-import ghidra.program.model.address.GlobalNamespace;
-import ghidra.program.model.listing.*;
-import ghidra.program.model.mem.MemoryBlock;
-import ghidra.program.model.symbol.*;
-import ghidra.program.model.symbol.ReferenceManager;
-import ghidra.program.model.symbol.Reference;
-import ghidra.program.model.symbol.ReferenceIterator;
-import ghidra.program.model.symbol.RefType;
-import ghidra.program.model.pcode.HighFunction;
-import ghidra.program.model.pcode.HighSymbol;
-import ghidra.program.model.pcode.LocalSymbolMap;
-import ghidra.program.model.pcode.HighFunctionDBUtil;
-import ghidra.program.model.pcode.HighFunctionDBUtil.ReturnCommitOption;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileResults;
 import ghidra.app.plugin.PluginCategoryNames;
 import ghidra.app.services.CodeViewerService;
 import ghidra.app.services.ProgramManager;
-import ghidra.app.util.PseudoDisassembler;
-import ghidra.app.cmd.function.SetVariableNameCmd;
-import ghidra.program.model.symbol.SourceType;
-import ghidra.program.model.listing.LocalVariableImpl;
-import ghidra.program.model.listing.ParameterImpl;
-import ghidra.util.exception.DuplicateNameException;
-import ghidra.util.exception.InvalidInputException;
+import ghidra.framework.options.Options;
+import ghidra.framework.plugintool.Plugin;
 import ghidra.framework.plugintool.PluginInfo;
+import ghidra.framework.plugintool.PluginTool;
 import ghidra.framework.plugintool.util.PluginStatus;
-import ghidra.program.util.ProgramLocation;
-import ghidra.util.Msg;
-import ghidra.util.task.ConsoleTaskMonitor;
-import ghidra.util.task.TaskMonitor;
-import ghidra.program.model.pcode.HighVariable;
-import ghidra.program.model.pcode.Varnode;
+import ghidra.program.model.address.Address;
+import ghidra.program.model.address.GlobalNamespace;
 import ghidra.program.model.data.DataType;
 import ghidra.program.model.data.DataTypeManager;
 import ghidra.program.model.data.PointerDataType;
-import ghidra.program.model.data.Undefined1DataType;
-import ghidra.program.model.listing.Variable;
-import ghidra.app.decompiler.component.DecompilerUtils;
-import ghidra.app.decompiler.ClangToken;
-import ghidra.framework.options.Options;
+import ghidra.program.model.listing.*;
+import ghidra.program.model.mem.MemoryBlock;
+import ghidra.program.model.pcode.*;
+import ghidra.program.model.pcode.HighFunctionDBUtil.ReturnCommitOption;
+import ghidra.program.model.symbol.*;
+import ghidra.program.util.ProgramLocation;
+import ghidra.util.Msg;
+import ghidra.util.task.ConsoleTaskMonitor;
 
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpServer;
-
-import javax.swing.SwingUtilities;
+import javax.swing.*;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.lang.reflect.InvocationTargetException;
@@ -840,7 +818,7 @@ public class GhidraMCPPlugin extends Plugin {
                 if (instr.getAddress().compareTo(end) > 0) {
                     break; // Stop if we've gone past the end of the function
                 }
-                String comment = listing.getComment(CodeUnit.EOL_COMMENT, instr.getAddress());
+                String comment = listing.getComment(CommentType.EOL, instr.getAddress());
                 comment = (comment != null) ? "; " + comment : "";
 
                 result.append(String.format("%s: %s %s\n", 
@@ -858,7 +836,7 @@ public class GhidraMCPPlugin extends Plugin {
     /**
      * Set a comment using the specified comment type (PRE_COMMENT or EOL_COMMENT)
      */
-    private boolean setCommentAtAddress(String addressStr, String comment, int commentType, String transactionName) {
+    private boolean setCommentAtAddress(String addressStr, String comment, CommentType commentType, String transactionName) {
         Program program = getCurrentProgram();
         if (program == null) return false;
         if (addressStr == null || addressStr.isEmpty() || comment == null) return false;
@@ -889,14 +867,14 @@ public class GhidraMCPPlugin extends Plugin {
      * Set a comment for a given address in the function pseudocode
      */
     private boolean setDecompilerComment(String addressStr, String comment) {
-        return setCommentAtAddress(addressStr, comment, CodeUnit.PRE_COMMENT, "Set decompiler comment");
+        return setCommentAtAddress(addressStr, comment, CommentType.PRE, "Set decompiler comment");
     }
 
     /**
      * Set a comment for a given address in the function disassembly
      */
     private boolean setDisassemblyComment(String addressStr, String comment) {
-        return setCommentAtAddress(addressStr, comment, CodeUnit.EOL_COMMENT, "Set disassembly comment");
+        return setCommentAtAddress(addressStr, comment, CommentType.EOL, "Set disassembly comment");
     }
 
     /**
@@ -1035,9 +1013,9 @@ public class GhidraMCPPlugin extends Plugin {
         int txComment = program.startTransaction("Add prototype comment");
         try {
             program.getListing().setComment(
-                func.getEntryPoint(), 
-                CodeUnit.PLATE_COMMENT, 
-                "Setting prototype: " + prototype
+                    func.getEntryPoint(),
+                    CommentType.PLATE,
+                    "Setting prototype: " + prototype
             );
         } finally {
             program.endTransaction(txComment, true);
@@ -1513,18 +1491,21 @@ public class GhidraMCPPlugin extends Plugin {
     private DataType searchByNameInAllCategories(DataTypeManager dtm, String name) {
         // Get all data types from the manager
         Iterator<DataType> allTypes = dtm.getAllDataTypes();
+        DataType fuzzyCandidate = null;
         while (allTypes.hasNext()) {
             DataType dt = allTypes.next();
             // Check if the name matches exactly (case-sensitive) 
             if (dt.getName().equals(name)) {
                 return dt;
-            }
-            // For case-insensitive, we want an exact match except for case
-            if (dt.getName().equalsIgnoreCase(name)) {
-                return dt;
+            } else if (fuzzyCandidate == null && dt.getName().equalsIgnoreCase(name)) {
+                // For case-insensitive, we want an exact match except for case
+                // We want to check ALL types for exact matches, not just the first one
+                // We want to stop on the very first match for fuzzy matching
+                fuzzyCandidate = dt;
             }
         }
-        return null;
+
+        return fuzzyCandidate;
     }
 
     // ----------------------------------------------------------------------------------
