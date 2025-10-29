@@ -5,6 +5,8 @@ import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.GlobalNamespace;
 import ghidra.program.model.listing.*;
+import ghidra.program.model.listing.BookmarkManager;
+import ghidra.program.model.listing.Bookmark;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.symbol.*;
 import ghidra.program.model.symbol.ReferenceManager;
@@ -18,6 +20,10 @@ import ghidra.program.model.pcode.HighFunctionDBUtil;
 import ghidra.program.model.pcode.HighFunctionDBUtil.ReturnCommitOption;
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileResults;
+import ghidra.app.decompiler.DecompileOptions;
+import ghidra.app.decompiler.ClangTokenGroup;
+import ghidra.app.decompiler.ClangNode;
+import ghidra.app.decompiler.ClangLine;
 import ghidra.app.plugin.PluginCategoryNames;
 import ghidra.app.services.CodeViewerService;
 import ghidra.app.services.ProgramManager;
@@ -44,6 +50,16 @@ import ghidra.program.model.listing.Variable;
 import ghidra.app.decompiler.component.DecompilerUtils;
 import ghidra.app.decompiler.ClangToken;
 import ghidra.framework.options.Options;
+import ghidra.program.model.block.*;
+import ghidra.program.model.mem.Memory;
+import ghidra.program.model.mem.MemoryAccessException;
+import ghidra.app.cmd.data.CreateDataCmd;
+import ghidra.program.model.data.DataTypeConflictHandler;
+import ghidra.program.model.data.CategoryPath;
+import ghidra.program.model.data.StructureDataType;
+import ghidra.program.model.data.Category;
+import ghidra.program.model.listing.Data;
+import ghidra.program.model.listing.InstructionIterator;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -341,6 +357,153 @@ public class GhidraMCPPlugin extends Plugin {
             sendResponse(exchange, listDefinedStrings(offset, limit, filter));
         });
 
+        // Bookmark endpoints
+        server.createContext("/bookmarks", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            int offset = parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = parseIntOrDefault(qparams.get("limit"), 100);
+            String type = qparams.get("type");  // Optional filter by type
+            sendResponse(exchange, listBookmarks(offset, limit, type));
+        });
+
+        server.createContext("/add_bookmark", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String addressStr = params.get("address");
+            String type = params.get("type");
+            String category = params.get("category");
+            String comment = params.get("comment");
+            String result = addBookmark(addressStr, type, category, comment);
+            sendResponse(exchange, result);
+        });
+
+        server.createContext("/remove_bookmark", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String addressStr = qparams.get("address");
+            String type = qparams.get("type");
+            String result = removeBookmark(addressStr, type);
+            sendResponse(exchange, result);
+        });
+
+        server.createContext("/bookmark_types", exchange -> {
+            sendResponse(exchange, listBookmarkTypes());
+        });
+
+        // Advanced Analysis endpoints
+        server.createContext("/analyze_function", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            sendResponse(exchange, analyzeFunction(address));
+        });
+
+        server.createContext("/program_stats", exchange -> {
+            sendResponse(exchange, getProgramStatistics());
+        });
+
+        server.createContext("/read_memory", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            int size = parseIntOrDefault(qparams.get("size"), 16);
+            String format = qparams.get("format"); // "hex" or "raw"
+            sendResponse(exchange, readMemory(address, size, format));
+        });
+
+        server.createContext("/search_memory", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String pattern = params.get("pattern");
+            String startAddr = params.get("start");
+            String endAddr = params.get("end");
+            int limit = parseIntOrDefault(params.get("limit"), 100);
+            sendResponse(exchange, searchMemory(pattern, startAddr, endAddr, limit));
+        });
+
+        server.createContext("/memory_map", exchange -> {
+            sendResponse(exchange, getDetailedMemoryMap());
+        });
+
+        server.createContext("/basic_blocks", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            sendResponse(exchange, getBasicBlocks(address));
+        });
+
+        server.createContext("/control_flow_graph", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            sendResponse(exchange, getControlFlowGraph(address));
+        });
+
+        server.createContext("/call_graph", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            int depth = parseIntOrDefault(qparams.get("depth"), 3);
+            String direction = qparams.get("direction"); // "callers", "callees", or "both"
+            sendResponse(exchange, getCallGraph(address, depth, direction));
+        });
+
+        // Data Type Operations
+        server.createContext("/list_data_types", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String category = qparams.get("category");
+            int offset = parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = parseIntOrDefault(qparams.get("limit"), 100);
+            sendResponse(exchange, listDataTypes(category, offset, limit));
+        });
+
+        server.createContext("/data_type_info", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String typeName = qparams.get("name");
+            sendResponse(exchange, getDataTypeInfo(typeName));
+        });
+
+        server.createContext("/create_data", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String address = params.get("address");
+            String typeName = params.get("type");
+            sendResponse(exchange, createDataAtAddress(address, typeName));
+        });
+
+        server.createContext("/delete_data", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String address = params.get("address");
+            sendResponse(exchange, deleteDataAtAddress(address));
+        });
+
+        server.createContext("/apply_data_type", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String address = params.get("address");
+            String typeName = params.get("type");
+            sendResponse(exchange, applyDataType(address, typeName));
+        });
+
+        // Enhanced Decompilation endpoints
+        server.createContext("/decompile_advanced", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String address = params.get("address");
+            String simplificationStyle = params.get("simplification_style"); // "normalize", "decompile", "firstpass", etc.
+            boolean includeSyntaxTree = "true".equalsIgnoreCase(params.get("include_syntax_tree"));
+            int timeout = parseIntOrDefault(params.get("timeout"), 60);
+            sendResponse(exchange, decompileAdvanced(address, simplificationStyle, includeSyntaxTree, timeout));
+        });
+
+        server.createContext("/decompile_with_options", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String address = params.get("address");
+            String optionsJson = params.get("options"); // JSON string with decompiler options
+            sendResponse(exchange, decompileWithOptions(address, optionsJson));
+        });
+
+        server.createContext("/get_syntax_tree", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String address = params.get("address");
+            sendResponse(exchange, getSyntaxTree(address));
+        });
+
+        server.createContext("/decompile_raw", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String address = params.get("address");
+            sendResponse(exchange, decompileRaw(address));
+        });
+
         // Health check endpoint
         server.createContext("/health", exchange -> {
             String status = "healthy";
@@ -409,7 +572,36 @@ public class GhidraMCPPlugin extends Plugin {
             info.append("POST /set_function_prototype - Set function signature\n");
             info.append("POST /set_local_variable_type - Set variable type\n");
             info.append("POST /set_decompiler_comment - Add pseudocode comment\n");
-            info.append("POST /set_disassembly_comment - Add assembly comment\n");
+            info.append("POST /set_disassembly_comment - Add assembly comment\n\n");
+            info.append("GET  /bookmarks?offset=0&limit=100&type=NOTE - List bookmarks (optional type filter)\n");
+            info.append("POST /add_bookmark - Add bookmark (address, type, category, comment)\n");
+            info.append("GET  /remove_bookmark?address=0x...&type=NOTE - Remove bookmark\n");
+            info.append("GET  /bookmark_types - List available bookmark types\n\n");
+
+            info.append("=== ADVANCED ANALYSIS ===\n");
+            info.append("GET  /analyze_function?address=0x... - Comprehensive function analysis\n");
+            info.append("GET  /program_stats - Program statistics and metadata\n");
+            info.append("GET  /read_memory?address=0x...&size=16&format=hex - Read memory bytes\n");
+            info.append("POST /search_memory - Search for byte pattern (pattern, start, end, limit)\n");
+            info.append("GET  /memory_map - Detailed memory map with permissions\n");
+            info.append("GET  /basic_blocks?address=0x... - List basic blocks for function\n");
+            info.append("GET  /control_flow_graph?address=0x... - Get CFG for function\n");
+            info.append("GET  /call_graph?address=0x...&depth=3&direction=both - Build call graph\n\n");
+
+            info.append("=== DATA TYPE OPERATIONS ===\n");
+            info.append("GET  /list_data_types?category=&offset=0&limit=100 - List data types\n");
+            info.append("GET  /data_type_info?name=DWORD - Get data type details\n");
+            info.append("POST /create_data - Create data (address, type)\n");
+            info.append("POST /delete_data - Delete data (address)\n");
+            info.append("POST /apply_data_type - Apply type to address (address, type)\n\n");
+
+            info.append("=== ENHANCED DECOMPILATION ===\n");
+            info.append("POST /decompile_advanced - Advanced decompile (address, simplification_style, include_syntax_tree, timeout)\n");
+            info.append("POST /decompile_with_options - Decompile with custom options (address)\n");
+            info.append("POST /get_syntax_tree - Get AST/syntax tree (address)\n");
+            info.append("POST /decompile_raw - Raw decompile with minimal processing (address)\n");
+            info.append("\nSimplification styles: decompile, normalize, firstpass, paramid, jumptable, unreachable\n");
+
             sendResponse(exchange, info.toString());
         });
 
@@ -1461,12 +1653,190 @@ public class GhidraMCPPlugin extends Plugin {
         return typeName.contains("string") || typeName.contains("char") || typeName.equals("unicode");
     }
 
+    // ----------------------------------------------------------------------------------
+    // Bookmark Management
+    // ----------------------------------------------------------------------------------
+
+    /**
+     * List all bookmarks, optionally filtered by type
+     */
+    private String listBookmarks(int offset, int limit, String typeFilter) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        BookmarkManager bmgr = program.getBookmarkManager();
+        List<String> lines = new ArrayList<>();
+
+        // Get all bookmark types or just the filtered one
+        String[] types;
+        if (typeFilter != null && !typeFilter.isEmpty()) {
+            types = new String[] { typeFilter };
+        } else {
+            BookmarkType[] bookmarkTypes = bmgr.getBookmarkTypes();
+            types = new String[bookmarkTypes.length];
+            for (int i = 0; i < bookmarkTypes.length; i++) {
+                types[i] = bookmarkTypes[i].getTypeString();
+            }
+        }
+
+        for (String type : types) {
+            Iterator<Bookmark> it = bmgr.getBookmarksIterator(type);
+            while (it.hasNext()) {
+                Bookmark bm = it.next();
+                String category = bm.getCategory() != null ? bm.getCategory() : "(none)";
+                String comment = bm.getComment() != null ? escapeString(bm.getComment()) : "";
+                lines.add(String.format("%s [%s] %s: %s",
+                    bm.getAddress(), type, category, comment));
+            }
+        }
+
+        if (lines.isEmpty()) {
+            return typeFilter != null
+                ? "No bookmarks of type '" + typeFilter + "'"
+                : "No bookmarks found";
+        }
+
+        Collections.sort(lines);
+        return paginateList(lines, offset, limit);
+    }
+
+    /**
+     * Add a bookmark at the specified address
+     */
+    private String addBookmark(String addressStr, String type, String category, String comment) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+
+        // Default to NOTE type if not specified
+        if (type == null || type.isEmpty()) {
+            type = "NOTE";
+        }
+
+        // Validate type
+        BookmarkManager bmgr = program.getBookmarkManager();
+        boolean validType = false;
+        BookmarkType[] bookmarkTypes = bmgr.getBookmarkTypes();
+        List<String> typeNames = new ArrayList<>();
+        for (BookmarkType bt : bookmarkTypes) {
+            String typeName = bt.getTypeString();
+            typeNames.add(typeName);
+            if (typeName.equalsIgnoreCase(type)) {
+                type = typeName;  // Use exact case from Ghidra
+                validType = true;
+            }
+        }
+        if (!validType) {
+            return "Invalid bookmark type: " + type + ". Valid types: " + String.join(", ", typeNames);
+        }
+
+        final String finalType = type;
+        final String finalCategory = (category != null && !category.isEmpty()) ? category : "";
+        final String finalComment = (comment != null) ? comment : "";
+
+        AtomicBoolean successFlag = new AtomicBoolean(false);
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Add bookmark");
+                try {
+                    Address addr = program.getAddressFactory().getAddress(addressStr);
+                    if (addr == null) {
+                        Msg.error(this, "Invalid address: " + addressStr);
+                        return;
+                    }
+
+                    bmgr.setBookmark(addr, finalType, finalCategory, finalComment);
+                    successFlag.set(true);
+                }
+                catch (Exception e) {
+                    Msg.error(this, "Error adding bookmark", e);
+                }
+                finally {
+                    program.endTransaction(tx, successFlag.get());
+                }
+            });
+        }
+        catch (InterruptedException | InvocationTargetException e) {
+            Msg.error(this, "Failed to execute add bookmark on Swing thread", e);
+            return "Failed to add bookmark: " + e.getMessage();
+        }
+
+        return successFlag.get()
+            ? "Bookmark added successfully at " + addressStr
+            : "Failed to add bookmark";
+    }
+
+    /**
+     * Remove bookmark at the specified address and type
+     */
+    private String removeBookmark(String addressStr, String type) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+        if (type == null || type.isEmpty()) return "Type is required";
+
+        AtomicBoolean successFlag = new AtomicBoolean(false);
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Remove bookmark");
+                try {
+                    Address addr = program.getAddressFactory().getAddress(addressStr);
+                    if (addr == null) {
+                        Msg.error(this, "Invalid address: " + addressStr);
+                        return;
+                    }
+
+                    BookmarkManager bmgr = program.getBookmarkManager();
+                    Bookmark[] bookmarks = bmgr.getBookmarks(addr, type);
+
+                    if (bookmarks.length > 0) {
+                        for (Bookmark bm : bookmarks) {
+                            bmgr.removeBookmark(bm);
+                        }
+                        successFlag.set(true);
+                    }
+                }
+                catch (Exception e) {
+                    Msg.error(this, "Error removing bookmark", e);
+                }
+                finally {
+                    program.endTransaction(tx, successFlag.get());
+                }
+            });
+        }
+        catch (InterruptedException | InvocationTargetException e) {
+            Msg.error(this, "Failed to execute remove bookmark on Swing thread", e);
+            return "Failed to remove bookmark: " + e.getMessage();
+        }
+
+        return successFlag.get()
+            ? "Bookmark removed at " + addressStr
+            : "No bookmark found at " + addressStr + " with type " + type;
+    }
+
+    /**
+     * List available bookmark types
+     */
+    private String listBookmarkTypes() {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        BookmarkManager bmgr = program.getBookmarkManager();
+        BookmarkType[] bookmarkTypes = bmgr.getBookmarkTypes();
+        List<String> typeNames = new ArrayList<>();
+        for (BookmarkType bt : bookmarkTypes) {
+            typeNames.add(bt.getTypeString());
+        }
+
+        return String.join("\n", typeNames);
+    }
+
     /**
      * Escape special characters in a string for display
      */
     private String escapeString(String input) {
         if (input == null) return "";
-        
+
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < input.length(); i++) {
             char c = input.charAt(i);
@@ -1730,6 +2100,994 @@ public class GhidraMCPPlugin extends Plugin {
         String errorJson = String.format("{\"error\":\"%s\",\"status\":%d}",
             errorMessage.replace("\"", "\\\""), statusCode);
         sendJsonResponse(exchange, errorJson, statusCode);
+    }
+
+    //======================================================================================
+    // HELPER METHODS
+    //======================================================================================
+
+    /**
+     * Parse an address string to an Address object
+     */
+    private Address parseAddress(Program program, String addressStr) {
+        if (program == null || addressStr == null || addressStr.isEmpty()) {
+            return null;
+        }
+        try {
+            return program.getAddressFactory().getAddress(addressStr);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    //======================================================================================
+    // ADVANCED ANALYSIS METHODS
+    //======================================================================================
+
+    /**
+     * Perform comprehensive analysis on a function
+     */
+    private String analyzeFunction(String addressStr) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+
+        Address addr = parseAddress(program, addressStr);
+        if (addr == null) return "Invalid address: " + addressStr;
+
+        Function func = getFunctionForAddress(program, addr);
+        if (func == null) return "No function at address: " + addressStr;
+
+        StringBuilder result = new StringBuilder();
+        result.append("Function Analysis: ").append(func.getName()).append("\n\n");
+
+        // Basic Information
+        result.append("=== Basic Information ===\n");
+        result.append("Entry Point: ").append(func.getEntryPoint()).append("\n");
+        result.append("Name: ").append(func.getName()).append("\n");
+        result.append("Signature: ").append(func.getPrototypeString(false, false)).append("\n");
+        result.append("Calling Convention: ").append(func.getCallingConventionName()).append("\n");
+        result.append("Return Type: ").append(func.getReturnType()).append("\n\n");
+
+        // Function Size and Complexity
+        result.append("=== Size and Complexity ===\n");
+        result.append("Body Size: ").append(func.getBody().getNumAddresses()).append(" bytes\n");
+
+        // Count instructions
+        int instructionCount = 0;
+        try {
+            InstructionIterator iter = program.getListing().getInstructions(func.getBody(), true);
+            while (iter.hasNext()) {
+                iter.next();
+                instructionCount++;
+            }
+        } catch (Exception e) {
+            instructionCount = -1;
+        }
+        result.append("Instruction Count: ").append(instructionCount).append("\n");
+
+        // Parameter and Variable Information
+        result.append("\n=== Parameters and Variables ===\n");
+        result.append("Parameter Count: ").append(func.getParameterCount()).append("\n");
+        result.append("Auto Parameter Count: ").append(func.getAutoParameterCount()).append("\n");
+        Variable[] localVars = func.getLocalVariables();
+        result.append("Local Variables: ").append(localVars != null ? localVars.length : 0).append("\n");
+
+        // Stack Frame Information
+        StackFrame frame = func.getStackFrame();
+        if (frame != null) {
+            result.append("Stack Frame Size: ").append(frame.getFrameSize()).append(" bytes\n");
+            result.append("Local Size: ").append(frame.getLocalSize()).append(" bytes\n");
+            result.append("Parameter Offset: ").append(frame.getParameterOffset()).append("\n");
+            result.append("Parameter Size: ").append(frame.getParameterSize()).append(" bytes\n");
+            result.append("Return Address Offset: ").append(frame.getReturnAddressOffset()).append("\n");
+        }
+
+        // Cross-references
+        result.append("\n=== Cross-references ===\n");
+        int callersCount = func.getCallingFunctions(TaskMonitor.DUMMY).size();
+        Set<Function> callees = func.getCalledFunctions(TaskMonitor.DUMMY);
+        result.append("Called By (Callers): ").append(callersCount).append(" functions\n");
+        result.append("Calls (Callees): ").append(callees.size()).append(" functions\n");
+
+        // Thunk information
+        if (func.isThunk()) {
+            result.append("\n=== Thunk Function ===\n");
+            Function thunkedFunc = func.getThunkedFunction(true);
+            if (thunkedFunc != null) {
+                result.append("Thunked Function: ").append(thunkedFunc.getName()).append("\n");
+            }
+        }
+
+        // External information
+        if (func.isExternal()) {
+            result.append("\n=== External Function ===\n");
+            result.append("External Location: ").append(func.getExternalLocation()).append("\n");
+        }
+
+        return result.toString();
+    }
+
+    /**
+     * Get comprehensive program statistics
+     */
+    private String getProgramStatistics() {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        StringBuilder result = new StringBuilder();
+        result.append("Program Statistics\n\n");
+
+        // Program Information
+        result.append("=== Program Information ===\n");
+        result.append("Name: ").append(program.getName()).append("\n");
+        result.append("Path: ").append(program.getExecutablePath()).append("\n");
+        result.append("Format: ").append(program.getExecutableFormat()).append("\n");
+        result.append("Language: ").append(program.getLanguage().getLanguageID()).append("\n");
+        result.append("Compiler: ").append(program.getCompilerSpec().getCompilerSpecID()).append("\n");
+        result.append("Processor: ").append(program.getLanguage().getProcessor()).append("\n");
+        result.append("Endian: ").append(program.getLanguage().isBigEndian() ? "Big" : "Little").append("\n");
+        result.append("Address Size: ").append(program.getAddressFactory().getDefaultAddressSpace().getSize()).append(" bits\n");
+
+        // Image Base
+        result.append("Image Base: ").append(program.getImageBase()).append("\n");
+        result.append("Min Address: ").append(program.getMinAddress()).append("\n");
+        result.append("Max Address: ").append(program.getMaxAddress()).append("\n\n");
+
+        // Function Statistics
+        FunctionManager funcMgr = program.getFunctionManager();
+        result.append("=== Functions ===\n");
+        result.append("Total Functions: ").append(funcMgr.getFunctionCount()).append("\n");
+
+        int externalFuncs = 0;
+        int thunkFuncs = 0;
+        for (Function func : funcMgr.getFunctions(true)) {
+            if (func.isExternal()) externalFuncs++;
+            if (func.isThunk()) thunkFuncs++;
+        }
+        result.append("External Functions: ").append(externalFuncs).append("\n");
+        result.append("Thunk Functions: ").append(thunkFuncs).append("\n\n");
+
+        // Memory Statistics
+        Memory memory = program.getMemory();
+        result.append("=== Memory ===\n");
+        result.append("Total Size: ").append(memory.getSize()).append(" bytes\n");
+
+        MemoryBlock[] blocks = memory.getBlocks();
+        result.append("Memory Blocks: ").append(blocks.length).append("\n");
+
+        long initializedSize = 0;
+        long uninitializedSize = 0;
+        int executableBlocks = 0;
+        int writableBlocks = 0;
+        for (MemoryBlock block : blocks) {
+            if (block.isInitialized()) {
+                initializedSize += block.getSize();
+            } else {
+                uninitializedSize += block.getSize();
+            }
+            if (block.isExecute()) executableBlocks++;
+            if (block.isWrite()) writableBlocks++;
+        }
+        result.append("Initialized: ").append(initializedSize).append(" bytes\n");
+        result.append("Uninitialized: ").append(uninitializedSize).append(" bytes\n");
+        result.append("Executable Blocks: ").append(executableBlocks).append("\n");
+        result.append("Writable Blocks: ").append(writableBlocks).append("\n\n");
+
+        // Symbol Statistics
+        SymbolTable symTable = program.getSymbolTable();
+        result.append("=== Symbols ===\n");
+        result.append("Total Symbols: ").append(symTable.getNumSymbols()).append("\n");
+
+        // Count defined data
+        Listing listing = program.getListing();
+        int definedDataCount = 0;
+        try {
+            Iterator<Data> dataIter = listing.getDefinedData(true);
+            while (dataIter.hasNext()) {
+                dataIter.next();
+                definedDataCount++;
+            }
+        } catch (Exception e) {
+            definedDataCount = -1;
+        }
+        result.append("Defined Data Items: ").append(definedDataCount).append("\n\n");
+
+        // Instruction Statistics
+        result.append("=== Instructions ===\n");
+        int totalInstructions = 0;
+        try {
+            InstructionIterator iter = listing.getInstructions(true);
+            while (iter.hasNext()) {
+                iter.next();
+                totalInstructions++;
+            }
+        } catch (Exception e) {
+            totalInstructions = -1;
+        }
+        result.append("Total Instructions: ").append(totalInstructions).append("\n\n");
+
+        // Data Type Statistics
+        DataTypeManager dtMgr = program.getDataTypeManager();
+        result.append("=== Data Types ===\n");
+        result.append("Total Data Types: ").append(dtMgr.getDataTypeCount(true)).append("\n");
+        result.append("Categories: ").append(dtMgr.getCategoryCount()).append("\n");
+
+        return result.toString();
+    }
+
+    /**
+     * Read memory bytes at specified address
+     */
+    private String readMemory(String addressStr, int size, String format) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+
+        Address addr = parseAddress(program, addressStr);
+        if (addr == null) return "Invalid address: " + addressStr;
+
+        if (size <= 0 || size > 10000) {
+            return "Invalid size: " + size + " (must be 1-10000)";
+        }
+
+        Memory memory = program.getMemory();
+        byte[] bytes = new byte[size];
+
+        try {
+            int bytesRead = memory.getBytes(addr, bytes);
+            if (bytesRead != size) {
+                return String.format("Warning: Only read %d of %d bytes", bytesRead, size);
+            }
+
+            StringBuilder result = new StringBuilder();
+            result.append("Memory at ").append(addr).append(" (").append(size).append(" bytes):\n\n");
+
+            if ("raw".equals(format)) {
+                // Raw format: just the bytes
+                for (int i = 0; i < bytesRead; i++) {
+                    result.append(String.format("%02X ", bytes[i] & 0xFF));
+                    if ((i + 1) % 16 == 0) result.append("\n");
+                }
+            } else {
+                // Hex dump format with address and ASCII
+                for (int i = 0; i < bytesRead; i += 16) {
+                    // Address
+                    result.append(String.format("%s: ", addr.add(i)));
+
+                    // Hex bytes
+                    for (int j = 0; j < 16 && (i + j) < bytesRead; j++) {
+                        result.append(String.format("%02X ", bytes[i + j] & 0xFF));
+                    }
+
+                    // Padding
+                    for (int j = bytesRead - i; j < 16; j++) {
+                        result.append("   ");
+                    }
+
+                    // ASCII representation
+                    result.append(" |");
+                    for (int j = 0; j < 16 && (i + j) < bytesRead; j++) {
+                        byte b = bytes[i + j];
+                        char c = (b >= 32 && b < 127) ? (char) b : '.';
+                        result.append(c);
+                    }
+                    result.append("|\n");
+                }
+            }
+
+            return result.toString();
+        } catch (MemoryAccessException e) {
+            return "Memory access error at " + addr + ": " + e.getMessage();
+        }
+    }
+
+    /**
+     * Search for byte pattern in memory
+     */
+    private String searchMemory(String pattern, String startAddr, String endAddr, int limit) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (pattern == null || pattern.isEmpty()) return "Pattern is required";
+
+        // Parse pattern from hex string
+        pattern = pattern.replace(" ", "").replace("0x", "");
+        if (pattern.length() % 2 != 0) {
+            return "Pattern must be an even number of hex digits";
+        }
+
+        byte[] searchBytes = new byte[pattern.length() / 2];
+        try {
+            for (int i = 0; i < searchBytes.length; i++) {
+                searchBytes[i] = (byte) Integer.parseInt(pattern.substring(i * 2, i * 2 + 2), 16);
+            }
+        } catch (NumberFormatException e) {
+            return "Invalid hex pattern: " + pattern;
+        }
+
+        Address start = startAddr != null ? parseAddress(program, startAddr) : program.getMinAddress();
+        Address end = endAddr != null ? parseAddress(program, endAddr) : program.getMaxAddress();
+
+        if (start == null || end == null) {
+            return "Invalid address range";
+        }
+
+        Memory memory = program.getMemory();
+        List<String> results = new ArrayList<>();
+        int count = 0;
+
+        try {
+            Address found = memory.findBytes(start, end, searchBytes, null, true, TaskMonitor.DUMMY);
+            while (found != null && count < limit) {
+                results.add(found.toString());
+                count++;
+                // Search for next occurrence
+                Address nextStart = found.add(1);
+                if (nextStart.compareTo(end) > 0) break;
+                found = memory.findBytes(nextStart, end, searchBytes, null, true, TaskMonitor.DUMMY);
+            }
+        } catch (Exception e) {
+            return "Search error: " + e.getMessage();
+        }
+
+        if (results.isEmpty()) {
+            return "Pattern not found";
+        }
+
+        return String.format("Found %d occurrences (limit: %d):\n%s",
+            results.size(), limit, String.join("\n", results));
+    }
+
+    /**
+     * Get detailed memory map with permissions and types
+     */
+    private String getDetailedMemoryMap() {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        Memory memory = program.getMemory();
+        MemoryBlock[] blocks = memory.getBlocks();
+
+        StringBuilder result = new StringBuilder();
+        result.append("Memory Map (").append(blocks.length).append(" blocks):\n\n");
+        result.append(String.format("%-20s %-20s %-12s %-6s %s\n",
+            "Start", "End", "Size", "Perms", "Name"));
+        result.append("=".repeat(80)).append("\n");
+
+        for (MemoryBlock block : blocks) {
+            String perms = "";
+            perms += block.isRead() ? "R" : "-";
+            perms += block.isWrite() ? "W" : "-";
+            perms += block.isExecute() ? "X" : "-";
+            perms += block.isInitialized() ? "I" : "U";
+
+            result.append(String.format("%-20s %-20s %,12d  %-6s %s\n",
+                block.getStart(),
+                block.getEnd(),
+                block.getSize(),
+                perms,
+                block.getName()
+            ));
+        }
+
+        return result.toString();
+    }
+
+    /**
+     * Get basic blocks for a function
+     */
+    private String getBasicBlocks(String addressStr) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+
+        Address addr = parseAddress(program, addressStr);
+        if (addr == null) return "Invalid address: " + addressStr;
+
+        Function func = getFunctionForAddress(program, addr);
+        if (func == null) return "No function at address: " + addressStr;
+
+        try {
+            BasicBlockModel bbModel = new BasicBlockModel(program);
+            CodeBlockIterator blockIter = bbModel.getCodeBlocksContaining(func.getBody(), TaskMonitor.DUMMY);
+
+            if (blockIter == null || !blockIter.hasNext()) {
+                return "No basic blocks found";
+            }
+
+            StringBuilder result = new StringBuilder();
+            result.append("Basic Blocks for ").append(func.getName()).append(":\n\n");
+            result.append(String.format("%-20s %-20s %10s %10s\n",
+                "Start", "End", "Size", "Inst Count"));
+            result.append("=".repeat(70)).append("\n");
+
+            int blockCount = 0;
+            while (blockIter.hasNext()) {
+                CodeBlock block = blockIter.next();
+                blockCount++;
+
+                Address start = block.getFirstStartAddress();
+                Address end = block.getMaxAddress();
+                long size = block.getNumAddresses();
+
+                // Count instructions in block
+                int instCount = 0;
+                try {
+                    InstructionIterator iter = program.getListing().getInstructions(block, true);
+                    while (iter.hasNext()) {
+                        iter.next();
+                        instCount++;
+                    }
+                } catch (Exception e) {
+                    instCount = -1;
+                }
+
+                result.append(String.format("%-20s %-20s %,10d %,10d\n",
+                    start, end, size, instCount));
+            }
+
+            result.append("\nTotal blocks: ").append(blockCount);
+            return result.toString();
+        } catch (Exception e) {
+            return "Error analyzing basic blocks: " + e.getMessage();
+        }
+    }
+
+    /**
+     * Get control flow graph information
+     */
+    private String getControlFlowGraph(String addressStr) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+
+        Address addr = parseAddress(program, addressStr);
+        if (addr == null) return "Invalid address: " + addressStr;
+
+        Function func = getFunctionForAddress(program, addr);
+        if (func == null) return "No function at address: " + addressStr;
+
+        try {
+            BasicBlockModel bbModel = new BasicBlockModel(program);
+            CodeBlockIterator blockIter = bbModel.getCodeBlocksContaining(func.getBody(), TaskMonitor.DUMMY);
+
+            if (blockIter == null || !blockIter.hasNext()) {
+                return "No basic blocks found";
+            }
+
+            StringBuilder result = new StringBuilder();
+            result.append("Control Flow Graph for ").append(func.getName()).append(":\n\n");
+
+            // For each block, show its connections
+            while (blockIter.hasNext()) {
+                CodeBlock block = blockIter.next();
+                Address start = block.getFirstStartAddress();
+                result.append("Block ").append(start).append(":\n");
+
+                // Get destinations (where this block flows to)
+                CodeBlockReferenceIterator destIter = block.getDestinations(TaskMonitor.DUMMY);
+                List<String> destinations = new ArrayList<>();
+                while (destIter.hasNext()) {
+                    CodeBlockReference ref = destIter.next();
+                    FlowType flowType = ref.getFlowType();
+                    Address destAddr = ref.getDestinationAddress();
+                    destinations.add(String.format("%s (%s)", destAddr, flowType.getName()));
+                }
+
+                if (!destinations.isEmpty()) {
+                    result.append("  Flows to: ").append(String.join(", ", destinations)).append("\n");
+                }
+
+                // Get sources (where this block is reached from)
+                CodeBlockReferenceIterator sourceIter = block.getSources(TaskMonitor.DUMMY);
+                List<String> sources = new ArrayList<>();
+                while (sourceIter.hasNext()) {
+                    CodeBlockReference ref = sourceIter.next();
+                    Address sourceAddr = ref.getSourceAddress();
+                    sources.add(sourceAddr.toString());
+                }
+
+                if (!sources.isEmpty()) {
+                    result.append("  From: ").append(String.join(", ", sources)).append("\n");
+                }
+
+                result.append("\n");
+            }
+
+            return result.toString();
+        } catch (Exception e) {
+            return "Error analyzing control flow: " + e.getMessage();
+        }
+    }
+
+    /**
+     * Build call graph showing function relationships
+     */
+    private String getCallGraph(String addressStr, int depth, String direction) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+
+        Address addr = parseAddress(program, addressStr);
+        if (addr == null) return "Invalid address: " + addressStr;
+
+        Function func = getFunctionForAddress(program, addr);
+        if (func == null) return "No function at address: " + addressStr;
+
+        if (depth <= 0 || depth > 10) {
+            depth = 3; // Default depth
+        }
+
+        if (direction == null || direction.isEmpty()) {
+            direction = "both";
+        }
+
+        StringBuilder result = new StringBuilder();
+        result.append("Call Graph for ").append(func.getName()).append(" (depth: ").append(depth).append("):\n\n");
+
+        if ("callers".equals(direction) || "both".equals(direction)) {
+            result.append("=== Callers (functions that call this) ===\n");
+            buildCallersGraph(func, depth, 0, new HashSet<>(), result);
+            result.append("\n");
+        }
+
+        if ("callees".equals(direction) || "both".equals(direction)) {
+            result.append("=== Callees (functions called by this) ===\n");
+            buildCalleesGraph(func, depth, 0, new HashSet<>(), result);
+        }
+
+        return result.toString();
+    }
+
+    private void buildCallersGraph(Function func, int maxDepth, int currentDepth, Set<Long> visited, StringBuilder result) {
+        if (currentDepth >= maxDepth || func == null) return;
+
+        long funcId = func.getID();
+        if (visited.contains(funcId)) {
+            return; // Avoid cycles
+        }
+        visited.add(funcId);
+
+        String indent = "  ".repeat(currentDepth);
+        result.append(indent).append(func.getName()).append(" @ ").append(func.getEntryPoint()).append("\n");
+
+        Set<Function> callers = func.getCallingFunctions(TaskMonitor.DUMMY);
+        for (Function caller : callers) {
+            buildCallersGraph(caller, maxDepth, currentDepth + 1, visited, result);
+        }
+    }
+
+    private void buildCalleesGraph(Function func, int maxDepth, int currentDepth, Set<Long> visited, StringBuilder result) {
+        if (currentDepth >= maxDepth || func == null) return;
+
+        long funcId = func.getID();
+        if (visited.contains(funcId)) {
+            return; // Avoid cycles
+        }
+        visited.add(funcId);
+
+        String indent = "  ".repeat(currentDepth);
+        result.append(indent).append(func.getName()).append(" @ ").append(func.getEntryPoint()).append("\n");
+
+        Set<Function> callees = func.getCalledFunctions(TaskMonitor.DUMMY);
+        for (Function callee : callees) {
+            buildCalleesGraph(callee, maxDepth, currentDepth + 1, visited, result);
+        }
+    }
+
+    //======================================================================================
+    // DATA TYPE OPERATIONS
+    //======================================================================================
+
+    /**
+     * List available data types
+     */
+    private String listDataTypes(String category, int offset, int limit) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        DataTypeManager dtMgr = program.getDataTypeManager();
+        List<String> types = new ArrayList<>();
+
+        if (category != null && !category.isEmpty()) {
+            // List types in specific category
+            CategoryPath catPath = new CategoryPath("/" + category);
+            try {
+                Category cat = dtMgr.getCategory(catPath);
+                if (cat != null) {
+                    for (DataType dt : cat.getDataTypes()) {
+                        types.add(dt.getPathName() + " (size: " + dt.getLength() + ")");
+                    }
+                }
+            } catch (Exception e) {
+                return "Category not found: " + category;
+            }
+        } else {
+            // List all data types
+            Iterator<DataType> iter = dtMgr.getAllDataTypes();
+            while (iter.hasNext()) {
+                DataType dt = iter.next();
+                types.add(dt.getPathName() + " (size: " + dt.getLength() + ")");
+            }
+        }
+
+        Collections.sort(types);
+        return paginateList(types, offset, limit);
+    }
+
+    /**
+     * Get detailed information about a data type
+     */
+    private String getDataTypeInfo(String typeName) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (typeName == null || typeName.isEmpty()) return "Type name is required";
+
+        DataTypeManager dtMgr = program.getDataTypeManager();
+        DataType dt = dtMgr.getDataType(typeName);
+
+        if (dt == null) {
+            // Try to find by name only (without path)
+            Iterator<DataType> iter = dtMgr.getAllDataTypes();
+            while (iter.hasNext()) {
+                DataType candidate = iter.next();
+                if (candidate.getName().equals(typeName)) {
+                    dt = candidate;
+                    break;
+                }
+            }
+        }
+
+        if (dt == null) {
+            return "Data type not found: " + typeName;
+        }
+
+        StringBuilder result = new StringBuilder();
+        result.append("Data Type: ").append(dt.getName()).append("\n\n");
+        result.append("Full Path: ").append(dt.getPathName()).append("\n");
+        result.append("Category: ").append(dt.getCategoryPath()).append("\n");
+        result.append("Size: ").append(dt.getLength()).append(" bytes\n");
+        result.append("Description: ").append(dt.getDescription()).append("\n");
+        result.append("Display Name: ").append(dt.getDisplayName()).append("\n");
+
+        return result.toString();
+    }
+
+    /**
+     * Create data at specified address with given type
+     */
+    private String createDataAtAddress(String addressStr, String typeName) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+        if (typeName == null || typeName.isEmpty()) return "Type name is required";
+
+        Address addr = parseAddress(program, addressStr);
+        if (addr == null) return "Invalid address: " + addressStr;
+
+        DataType dataType = resolveDataType(program.getDataTypeManager(), typeName);
+        if (dataType == null) {
+            return "Data type not found: " + typeName;
+        }
+
+        final String[] resultHolder = {null};
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int txId = program.startTransaction("Create Data");
+                try {
+                    CreateDataCmd cmd = new CreateDataCmd(addr, dataType);
+                    if (cmd.applyTo(program)) {
+                        program.endTransaction(txId, true);
+                        resultHolder[0] = "Data created at " + addr + " with type " + dataType.getName();
+                    } else {
+                        program.endTransaction(txId, false);
+                        resultHolder[0] = "Failed to create data: " + cmd.getStatusMsg();
+                    }
+                } catch (Exception e) {
+                    program.endTransaction(txId, false);
+                    resultHolder[0] = "Error creating data: " + e.getMessage();
+                }
+            });
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
+        }
+
+        return resultHolder[0] != null ? resultHolder[0] : "Unknown error";
+    }
+
+    /**
+     * Delete data at specified address
+     */
+    private String deleteDataAtAddress(String addressStr) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+
+        Address addr = parseAddress(program, addressStr);
+        if (addr == null) return "Invalid address: " + addressStr;
+
+        final String[] resultHolder = {null};
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int txId = program.startTransaction("Delete Data");
+                try {
+                    Listing listing = program.getListing();
+                    Data data = listing.getDataAt(addr);
+
+                    if (data == null) {
+                        program.endTransaction(txId, false);
+                        resultHolder[0] = "No data at address: " + addr;
+                        return;
+                    }
+
+                    listing.clearCodeUnits(addr, addr.add(data.getLength() - 1), false);
+                    program.endTransaction(txId, true);
+                    resultHolder[0] = "Data deleted at " + addr;
+                } catch (Exception e) {
+                    program.endTransaction(txId, false);
+                    resultHolder[0] = "Error deleting data: " + e.getMessage();
+                }
+            });
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
+        }
+
+        return resultHolder[0] != null ? resultHolder[0] : "Unknown error";
+    }
+
+    /**
+     * Apply data type at specified address
+     */
+    private String applyDataType(String addressStr, String typeName) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+        if (typeName == null || typeName.isEmpty()) return "Type name is required";
+
+        Address addr = parseAddress(program, addressStr);
+        if (addr == null) return "Invalid address: " + addressStr;
+
+        DataType dataType = resolveDataType(program.getDataTypeManager(), typeName);
+        if (dataType == null) {
+            return "Data type not found: " + typeName;
+        }
+
+        final String[] resultHolder = {null};
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int txId = program.startTransaction("Apply Data Type");
+                try {
+                    Listing listing = program.getListing();
+                    Data existingData = listing.getDataAt(addr);
+
+                    if (existingData != null) {
+                        // Clear existing data first
+                        listing.clearCodeUnits(addr, addr.add(existingData.getLength() - 1), false);
+                    }
+
+                    // Create new data with the type
+                    CreateDataCmd cmd = new CreateDataCmd(addr, dataType);
+                    if (cmd.applyTo(program)) {
+                        program.endTransaction(txId, true);
+                        resultHolder[0] = "Applied type " + dataType.getName() + " at " + addr;
+                    } else {
+                        program.endTransaction(txId, false);
+                        resultHolder[0] = "Failed to apply type: " + cmd.getStatusMsg();
+                    }
+                } catch (Exception e) {
+                    program.endTransaction(txId, false);
+                    resultHolder[0] = "Error applying type: " + e.getMessage();
+                }
+            });
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
+        }
+
+        return resultHolder[0] != null ? resultHolder[0] : "Unknown error";
+    }
+
+    //======================================================================================
+    // ENHANCED DECOMPILATION METHODS
+    //======================================================================================
+
+    /**
+     * Advanced decompilation with configurable options
+     */
+    private String decompileAdvanced(String addressStr, String simplificationStyle, boolean includeSyntaxTree, int timeout) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+
+        Address addr = parseAddress(program, addressStr);
+        if (addr == null) return "Invalid address: " + addressStr;
+
+        Function func = getFunctionForAddress(program, addr);
+        if (func == null) return "No function at address: " + addressStr;
+
+        DecompInterface decomp = new DecompInterface();
+        decomp.openProgram(program);
+
+        // Set simplification style
+        if (simplificationStyle != null && !simplificationStyle.isEmpty()) {
+            decomp.setSimplificationStyle(simplificationStyle);
+        } else {
+            decomp.setSimplificationStyle("decompile"); // Default
+        }
+
+        // Decompile with specified timeout
+        DecompileResults results = decomp.decompileFunction(func, timeout, TaskMonitor.DUMMY);
+
+        if (results == null || !results.decompileCompleted()) {
+            decomp.dispose();
+            return "Decompilation failed: " + (results != null ? results.getErrorMessage() : "Unknown error");
+        }
+
+        StringBuilder output = new StringBuilder();
+        output.append("=== Advanced Decompilation ===\n");
+        output.append("Function: ").append(func.getName()).append("\n");
+        output.append("Address: ").append(func.getEntryPoint()).append("\n");
+        output.append("Simplification Style: ").append(simplificationStyle != null ? simplificationStyle : "decompile").append("\n");
+        output.append("\n=== Decompiled Code ===\n");
+        output.append(results.getDecompiledFunction().getC()).append("\n");
+
+        if (includeSyntaxTree) {
+            output.append("\n=== Syntax Tree (AST) ===\n");
+            ClangTokenGroup tokens = results.getCCodeMarkup();
+            if (tokens != null) {
+                output.append(formatSyntaxTree(tokens, 0));
+            } else {
+                output.append("No syntax tree available\n");
+            }
+        }
+
+        decomp.dispose();
+        return output.toString();
+    }
+
+    /**
+     * Decompile with custom options (for future extensibility)
+     */
+    private String decompileWithOptions(String addressStr, String optionsJson) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+
+        Address addr = parseAddress(program, addressStr);
+        if (addr == null) return "Invalid address: " + addressStr;
+
+        Function func = getFunctionForAddress(program, addr);
+        if (func == null) return "No function at address: " + addressStr;
+
+        DecompInterface decomp = new DecompInterface();
+
+        // Get default options and allow customization
+        DecompileOptions options = new DecompileOptions();
+
+        // Parse simple options (in future could parse JSON)
+        // For now, use sensible defaults
+        options.setEliminateUnreachable(true);
+        options.setSimplifyDoublePrecision(true);
+
+        decomp.setOptions(options);
+        decomp.openProgram(program);
+
+        DecompileResults results = decomp.decompileFunction(func, 60, TaskMonitor.DUMMY);
+
+        if (results == null || !results.decompileCompleted()) {
+            decomp.dispose();
+            return "Decompilation failed: " + (results != null ? results.getErrorMessage() : "Unknown error");
+        }
+
+        StringBuilder output = new StringBuilder();
+        output.append("=== Decompilation with Custom Options ===\n");
+        output.append("Function: ").append(func.getName()).append("\n\n");
+        output.append(results.getDecompiledFunction().getC());
+
+        decomp.dispose();
+        return output.toString();
+    }
+
+    /**
+     * Get syntax tree (AST) representation
+     */
+    private String getSyntaxTree(String addressStr) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+
+        Address addr = parseAddress(program, addressStr);
+        if (addr == null) return "Invalid address: " + addressStr;
+
+        Function func = getFunctionForAddress(program, addr);
+        if (func == null) return "No function at address: " + addressStr;
+
+        DecompInterface decomp = new DecompInterface();
+        decomp.openProgram(program);
+        decomp.setSimplificationStyle("decompile");
+
+        DecompileResults results = decomp.decompileFunction(func, 60, TaskMonitor.DUMMY);
+
+        if (results == null || !results.decompileCompleted()) {
+            decomp.dispose();
+            return "Decompilation failed: " + (results != null ? results.getErrorMessage() : "Unknown error");
+        }
+
+        StringBuilder output = new StringBuilder();
+        output.append("=== Syntax Tree for ").append(func.getName()).append(" ===\n\n");
+
+        ClangTokenGroup tokens = results.getCCodeMarkup();
+        if (tokens != null) {
+            output.append(formatSyntaxTree(tokens, 0));
+        } else {
+            output.append("No syntax tree available");
+        }
+
+        decomp.dispose();
+        return output.toString();
+    }
+
+    /**
+     * Get raw decompiler output with minimal processing
+     */
+    private String decompileRaw(String addressStr) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+
+        Address addr = parseAddress(program, addressStr);
+        if (addr == null) return "Invalid address: " + addressStr;
+
+        Function func = getFunctionForAddress(program, addr);
+        if (func == null) return "No function at address: " + addressStr;
+
+        DecompInterface decomp = new DecompInterface();
+        decomp.openProgram(program);
+
+        // Use "firstpass" or "normalize" for minimal simplification
+        decomp.setSimplificationStyle("firstpass");
+
+        DecompileResults results = decomp.decompileFunction(func, 60, TaskMonitor.DUMMY);
+
+        if (results == null || !results.decompileCompleted()) {
+            decomp.dispose();
+            return "Decompilation failed: " + (results != null ? results.getErrorMessage() : "Unknown error");
+        }
+
+        StringBuilder output = new StringBuilder();
+        output.append("=== Raw Decompilation (Minimal Processing) ===\n");
+        output.append("Function: ").append(func.getName()).append("\n\n");
+        output.append(results.getDecompiledFunction().getC());
+
+        decomp.dispose();
+        return output.toString();
+    }
+
+    /**
+     * Format syntax tree recursively for display
+     */
+    private String formatSyntaxTree(ClangNode node, int depth) {
+        StringBuilder sb = new StringBuilder();
+        String indent = "  ".repeat(depth);
+
+        // Add current node info
+        sb.append(indent);
+        sb.append(node.getClass().getSimpleName());
+
+        if (node instanceof ClangToken) {
+            ClangToken token = (ClangToken) node;
+            sb.append(": \"").append(escapeString(token.getText())).append("\"");
+        }
+        sb.append("\n");
+
+        // Recursively add children
+        if (node instanceof ClangTokenGroup) {
+            ClangTokenGroup group = (ClangTokenGroup) node;
+            for (int i = 0; i < group.numChildren(); i++) {
+                sb.append(formatSyntaxTree(group.Child(i), depth + 1));
+            }
+        }
+
+        return sb.toString();
     }
 
     @Override

@@ -75,7 +75,13 @@ jobs:
             - [ ] Update documentation if needed
             - [ ] Create release after successful testing
 
-            You can also trigger the auto-update workflow manually to create a PR.`;
+            ## Quick Actions
+
+            **Option 1: Auto-update and create PR**
+            Trigger the [Auto-Update Workflow](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/workflows/auto-update-ghidra.yml) manually
+
+            **Option 2: Create release directly**
+            Trigger the [Create Release Workflow](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/workflows/create-release.yml) manually after merging updates`;
 
             // Check if issue already exists
             const issues = await github.rest.issues.listForRepo({

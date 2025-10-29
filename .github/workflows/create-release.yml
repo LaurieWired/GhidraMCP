@@ -1,0 +1,188 @@
+name: Create Release on Ghidra Update
+
+on:
+  workflow_dispatch:
+    inputs:
+      ghidra_version:
+        description: 'Ghidra version (e.g., 11.4.2)'
+        required: true
+        type: string
+      release_notes:
+        description: 'Additional release notes (optional)'
+        required: false
+        type: string
+        default: ''
+  # Can also be triggered by other workflows
+  workflow_call:
+    inputs:
+      ghidra_version:
+        description: 'Ghidra version to build against'
+        required: true
+        type: string
+      release_notes:
+        description: 'Additional release notes'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get Ghidra release info
+        id: ghidra_info
+        run: |
+          # Fetch Ghidra release info from GitHub API
+          GHIDRA_RELEASE_INFO=$(curl -s "https://api.github.com/repos/NationalSecurityAgency/ghidra/releases/tags/Ghidra_${{ inputs.ghidra_version }}_build")
+
+          # Extract release date and download URL
+          RELEASE_DATE=$(echo "$GHIDRA_RELEASE_INFO" | jq -r '.published_at')
+          ASSET_NAME=$(echo "$GHIDRA_RELEASE_INFO" | jq -r '.assets[] | select(.name | contains("PUBLIC")) | .name')
+
+          # Extract date from filename (e.g., ghidra_11.4.2_PUBLIC_20250826.zip -> 20250826)
+          GHIDRA_DATE=$(echo "$ASSET_NAME" | grep -oP '\d{8}(?=\.zip)')
+
+          echo "release_date=$RELEASE_DATE" >> $GITHUB_OUTPUT
+          echo "ghidra_date=$GHIDRA_DATE" >> $GITHUB_OUTPUT
+          echo "asset_name=$ASSET_NAME" >> $GITHUB_OUTPUT
+
+          echo "Ghidra Release Date: $RELEASE_DATE"
+          echo "Ghidra Build Date: $GHIDRA_DATE"
+          echo "Asset Name: $ASSET_NAME"
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Download Ghidra
+        run: |
+          wget --no-verbose -O ghidra.zip https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${{ inputs.ghidra_version }}_build/${{ steps.ghidra_info.outputs.asset_name }}
+          7z x -bd ghidra.zip
+
+      - name: Copy Ghidra libs
+        run: |
+          mkdir -p ./lib
+          GHIDRA_LIBS="Features/Base/lib/Base.jar Features/Decompiler/lib/Decompiler.jar Framework/Docking/lib/Docking.jar Framework/Generic/lib/Generic.jar Framework/Project/lib/Project.jar Framework/SoftwareModeling/lib/SoftwareModeling.jar Framework/Utility/lib/Utility.jar Framework/Gui/lib/Gui.jar"
+          for libfile in $GHIDRA_LIBS; do
+            echo "Copying ${libfile} to lib/"
+            cp ghidra_${{ inputs.ghidra_version }}_PUBLIC/Ghidra/${libfile} ./lib/
+          done
+
+      - name: Build with Maven
+        run: mvn clean package assembly:single
+
+      - name: Prepare release artifacts
+        run: |
+          mkdir -p release
+          cp target/GhidraMCP-*-SNAPSHOT.zip release/GhidraMCP-${{ inputs.ghidra_version }}.zip
+          cp bridge_mcp_ghidra.py release/
+          cp requirements.txt release/
+
+          # Create checksums
+          cd release
+          sha256sum GhidraMCP-${{ inputs.ghidra_version }}.zip > checksums.txt
+          sha256sum bridge_mcp_ghidra.py >> checksums.txt
+          sha256sum requirements.txt >> checksums.txt
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          cat > release_notes.md << 'EOF'
+          # AutoREV ${{ inputs.ghidra_version }}
+
+          This release updates AutoREV to support **Ghidra ${{ inputs.ghidra_version }}**.
+
+          ## What's Included
+
+          - GhidraMCP plugin for Ghidra ${{ inputs.ghidra_version }}
+          - Python MCP bridge with 29 tools
+          - Health monitoring and version endpoints
+          - Automated release monitoring
+
+          ## Installation
+
+          ### Ghidra Plugin
+          1. Download `GhidraMCP-${{ inputs.ghidra_version }}.zip`
+          2. In Ghidra: `File` → `Install Extensions` → Click `+` → Select the ZIP
+          3. Restart Ghidra
+          4. Enable plugin: `File` → `Configure` → `Developer` → Check **GhidraMCPPlugin**
+
+          ### Python MCP Bridge
+          ```bash
+          pip install -r requirements.txt
+          python bridge_mcp_ghidra.py --ghidra-server http://127.0.0.1:8080/
+          ```
+
+          ## Features
+
+          - 33+ HTTP endpoints for reverse engineering
+          - Decompilation, disassembly, and analysis
+          - Function and variable renaming
+          - Cross-reference analysis
+          - Symbol and namespace management
+          - Health check and version endpoints
+          - CORS support and JSON responses
+
+          ## Requirements
+
+          - Ghidra ${{ inputs.ghidra_version }}
+          - Python 3.10+
+          - JDK 21 (for building from source)
+
+          ## Ghidra Release
+
+          Based on [Ghidra ${{ inputs.ghidra_version }}](https://github.com/NationalSecurityAgency/ghidra/releases/tag/Ghidra_${{ inputs.ghidra_version }}_build) released on ${{ steps.ghidra_info.outputs.release_date }}
+
+          ${{ inputs.release_notes }}
+
+          ## Checksums (SHA-256)
+
+          See `checksums.txt` for file verification.
+
+          ---
+
+          **Full Documentation:** [README](https://github.com/Sarks0/AutoREV/blob/main/README.md)
+          EOF
+
+          echo "Release notes generated successfully"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.ghidra_version }}
+          name: AutoREV ${{ inputs.ghidra_version }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+          files: |
+            release/GhidraMCP-${{ inputs.ghidra_version }}.zip
+            release/bridge_mcp_ghidra.py
+            release/requirements.txt
+            release/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "## Release Created Successfully! :rocket:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Release:** v${{ inputs.ghidra_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Ghidra Version:** ${{ inputs.ghidra_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Build Date:** ${{ steps.ghidra_info.outputs.ghidra_date }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "- GhidraMCP-${{ inputs.ghidra_version }}.zip" >> $GITHUB_STEP_SUMMARY
+          echo "- bridge_mcp_ghidra.py" >> $GITHUB_STEP_SUMMARY
+          echo "- requirements.txt" >> $GITHUB_STEP_SUMMARY
+          echo "- checksums.txt" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "[View Release](https://github.com/Sarks0/AutoREV/releases/tag/v${{ inputs.ghidra_version }})" >> $GITHUB_STEP_SUMMARY

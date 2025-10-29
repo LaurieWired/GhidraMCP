@@ -337,6 +337,371 @@ def get_api_info() -> list:
     """
     return safe_get("api/info")
 
+@mcp.tool()
+def list_bookmarks(offset: int = 0, limit: int = 100, type: str = None) -> list:
+    """
+    List all bookmarks in the program.
+
+    Args:
+        offset: Pagination offset (default: 0)
+        limit: Maximum number of bookmarks to return (default: 100)
+        type: Optional filter by bookmark type (NOTE, INFO, WARNING, ERROR, ANALYSIS)
+
+    Returns:
+        List of bookmarks with address, type, category, and comment
+    """
+    params = {"offset": offset, "limit": limit}
+    if type:
+        params["type"] = type
+    return safe_get("bookmarks", params)
+
+@mcp.tool()
+def add_bookmark(address: str, type: str = "NOTE", category: str = "", comment: str = "") -> str:
+    """
+    Add a bookmark at the specified address.
+
+    Args:
+        address: Memory address (e.g., 0x00401000)
+        type: Bookmark type - NOTE, INFO, WARNING, ERROR, or ANALYSIS (default: NOTE)
+        category: Optional category for organization
+        comment: Optional comment or description
+
+    Returns:
+        Success or error message
+    """
+    data = {
+        "address": address,
+        "type": type,
+        "category": category,
+        "comment": comment
+    }
+    return safe_post("add_bookmark", data)
+
+@mcp.tool()
+def remove_bookmark(address: str, type: str) -> str:
+    """
+    Remove a bookmark at the specified address.
+
+    Args:
+        address: Memory address (e.g., 0x00401000)
+        type: Bookmark type to remove (NOTE, INFO, WARNING, ERROR, ANALYSIS)
+
+    Returns:
+        Success or error message
+    """
+    return safe_get("remove_bookmark", {"address": address, "type": type})
+
+@mcp.tool()
+def get_bookmark_types() -> list:
+    """
+    Get all available bookmark types in Ghidra.
+
+    Returns:
+        List of available bookmark types (typically: NOTE, INFO, WARNING, ERROR, ANALYSIS)
+    """
+    return safe_get("bookmark_types")
+
+# Advanced Analysis Tools
+
+@mcp.tool()
+def analyze_function(address: str) -> str:
+    """
+    Perform comprehensive analysis on a function.
+
+    Returns detailed information including:
+    - Basic information (name, signature, calling convention)
+    - Size and complexity metrics (instruction count, body size)
+    - Parameters and local variables
+    - Stack frame information
+    - Cross-references (callers and callees)
+    - Thunk and external function information
+
+    Args:
+        address: Function address in hex format (e.g., "0x00401000")
+
+    Returns:
+        Comprehensive function analysis report
+    """
+    return "\n".join(safe_get("analyze_function", {"address": address}))
+
+@mcp.tool()
+def get_program_statistics() -> str:
+    """
+    Get comprehensive program statistics.
+
+    Returns detailed information including:
+    - Program information (name, format, language, compiler)
+    - Image base and address range
+    - Function statistics (total, external, thunks)
+    - Memory statistics (size, blocks, permissions)
+    - Symbol and data statistics
+    - Instruction counts
+    - Data type statistics
+
+    Returns:
+        Comprehensive program statistics report
+    """
+    return "\n".join(safe_get("program_stats"))
+
+@mcp.tool()
+def read_memory(address: str, size: int = 16, format: str = "hex") -> str:
+    """
+    Read memory bytes at specified address.
+
+    Args:
+        address: Memory address in hex format (e.g., "0x00401000")
+        size: Number of bytes to read (1-10000, default: 16)
+        format: Output format - "hex" for hex dump with ASCII, "raw" for hex bytes only
+
+    Returns:
+        Memory dump in requested format
+    """
+    return "\n".join(safe_get("read_memory", {"address": address, "size": size, "format": format}))
+
+@mcp.tool()
+def search_memory(pattern: str, start: str = None, end: str = None, limit: int = 100) -> str:
+    """
+    Search for byte pattern in memory.
+
+    Args:
+        pattern: Hex byte pattern to search for (e.g., "4883EC20" or "48 83 EC 20")
+        start: Starting address for search (optional, defaults to min address)
+        end: Ending address for search (optional, defaults to max address)
+        limit: Maximum number of results to return (default: 100)
+
+    Returns:
+        List of addresses where pattern was found
+    """
+    data = {"pattern": pattern, "limit": str(limit)}
+    if start:
+        data["start"] = start
+    if end:
+        data["end"] = end
+    return safe_post("search_memory", data)
+
+@mcp.tool()
+def get_memory_map() -> str:
+    """
+    Get detailed memory map with permissions and types.
+
+    Returns memory layout showing:
+    - Start and end addresses
+    - Block sizes
+    - Permissions (R=Read, W=Write, X=Execute, I=Initialized, U=Uninitialized)
+    - Block names
+
+    Returns:
+        Formatted memory map table
+    """
+    return "\n".join(safe_get("memory_map"))
+
+@mcp.tool()
+def get_basic_blocks(address: str) -> str:
+    """
+    Get basic blocks for a function.
+
+    Args:
+        address: Function address in hex format (e.g., "0x00401000")
+
+    Returns:
+        List of basic blocks with start/end addresses, sizes, and instruction counts
+    """
+    return "\n".join(safe_get("basic_blocks", {"address": address}))
+
+@mcp.tool()
+def get_control_flow_graph(address: str) -> str:
+    """
+    Get control flow graph information for a function.
+
+    Shows how basic blocks connect to each other with flow types
+    (conditional branches, unconditional jumps, calls, etc.)
+
+    Args:
+        address: Function address in hex format (e.g., "0x00401000")
+
+    Returns:
+        Control flow graph showing block relationships
+    """
+    return "\n".join(safe_get("control_flow_graph", {"address": address}))
+
+@mcp.tool()
+def get_call_graph(address: str, depth: int = 3, direction: str = "both") -> str:
+    """
+    Build call graph showing function relationships.
+
+    Args:
+        address: Function address in hex format (e.g., "0x00401000")
+        depth: Maximum depth to traverse (1-10, default: 3)
+        direction: "callers" (functions that call this), "callees" (functions called by this), or "both"
+
+    Returns:
+        Call graph showing function call hierarchy
+    """
+    return "\n".join(safe_get("call_graph", {"address": address, "depth": depth, "direction": direction}))
+
+# Data Type Operations
+
+@mcp.tool()
+def list_data_types(category: str = None, offset: int = 0, limit: int = 100) -> list:
+    """
+    List available data types in the program.
+
+    Args:
+        category: Optional category filter (e.g., "winnt" for Windows types)
+        offset: Pagination offset (default: 0)
+        limit: Maximum number of types to return (default: 100)
+
+    Returns:
+        List of data types with sizes
+    """
+    params = {"offset": offset, "limit": limit}
+    if category:
+        params["category"] = category
+    return safe_get("list_data_types", params)
+
+@mcp.tool()
+def get_data_type_info(name: str) -> str:
+    """
+    Get detailed information about a data type.
+
+    Args:
+        name: Data type name (e.g., "DWORD", "IMAGE_DOS_HEADER")
+
+    Returns:
+        Detailed data type information including size and description
+    """
+    return "\n".join(safe_get("data_type_info", {"name": name}))
+
+@mcp.tool()
+def create_data(address: str, type_name: str) -> str:
+    """
+    Create data at specified address with given type.
+
+    Args:
+        address: Memory address (e.g., "0x00401000")
+        type_name: Data type name (e.g., "DWORD", "char", "byte")
+
+    Returns:
+        Success or error message
+    """
+    return safe_post("create_data", {"address": address, "type": type_name})
+
+@mcp.tool()
+def delete_data(address: str) -> str:
+    """
+    Delete data at specified address (clear to undefined).
+
+    Args:
+        address: Memory address (e.g., "0x00401000")
+
+    Returns:
+        Success or error message
+    """
+    return safe_post("delete_data", {"address": address})
+
+@mcp.tool()
+def apply_data_type(address: str, type_name: str) -> str:
+    """
+    Apply or change data type at specified address.
+
+    Clears existing data and applies the new type.
+
+    Args:
+        address: Memory address (e.g., "0x00401000")
+        type_name: Data type name (e.g., "DWORD", "char[]")
+
+    Returns:
+        Success or error message
+    """
+    return safe_post("apply_data_type", {"address": address, "type": type_name})
+
+# Enhanced Decompilation Tools
+
+@mcp.tool()
+def decompile_advanced(address: str, simplification_style: str = "decompile",
+                      include_syntax_tree: bool = False, timeout: int = 60) -> str:
+    """
+    Advanced decompilation with configurable options.
+
+    Provides fine-grained control over the decompilation process with multiple
+    simplification styles and optional syntax tree (AST) output.
+
+    Args:
+        address: Function address in hex format (e.g., "0x00401000")
+        simplification_style: Decompilation style - options include:
+            - "decompile" (default): Full decompilation with all simplifications
+            - "normalize": Minimal simplification, more literal translation
+            - "firstpass": First pass only, least simplified
+            - "paramid": Parameter identification pass
+            - "jumptable": Jump table analysis
+            - "unreachable": Unreachable code analysis
+        include_syntax_tree: Include abstract syntax tree in output (default: False)
+        timeout: Decompilation timeout in seconds (default: 60)
+
+    Returns:
+        Decompiled code with optional syntax tree
+    """
+    data = {
+        "address": address,
+        "simplification_style": simplification_style,
+        "include_syntax_tree": "true" if include_syntax_tree else "false",
+        "timeout": str(timeout)
+    }
+    return safe_post("decompile_advanced", data)
+
+@mcp.tool()
+def decompile_with_options(address: str) -> str:
+    """
+    Decompile with custom decompiler options.
+
+    Uses enhanced decompiler options for better output quality:
+    - Eliminates unreachable code
+    - Simplifies double precision floating point
+    - Optimizes for readability
+
+    Args:
+        address: Function address in hex format (e.g., "0x00401000")
+
+    Returns:
+        Decompiled code with enhanced options
+    """
+    return safe_post("decompile_with_options", {"address": address})
+
+@mcp.tool()
+def get_syntax_tree(address: str) -> str:
+    """
+    Get the abstract syntax tree (AST) for a decompiled function.
+
+    The syntax tree shows the hierarchical structure of the decompiled code,
+    useful for understanding code structure and implementing custom analysis.
+
+    Args:
+        address: Function address in hex format (e.g., "0x00401000")
+
+    Returns:
+        Formatted syntax tree showing node hierarchy
+    """
+    return safe_post("get_syntax_tree", {"address": address})
+
+@mcp.tool()
+def decompile_raw(address: str) -> str:
+    """
+    Get raw decompiler output with minimal processing.
+
+    Uses first-pass simplification for a more literal translation
+    of the assembly code. Useful for:
+    - Understanding exact assembly behavior
+    - Debugging decompilation issues
+    - Analyzing obfuscated code
+
+    Args:
+        address: Function address in hex format (e.g., "0x00401000")
+
+    Returns:
+        Raw decompiled code with minimal simplification
+    """
+    return safe_post("decompile_raw", {"address": address})
+
 def main():
     parser = argparse.ArgumentParser(description="MCP server for Ghidra")
     parser.add_argument("--ghidra-server", type=str, default=DEFAULT_GHIDRA_SERVER,
