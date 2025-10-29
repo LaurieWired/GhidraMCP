@@ -4,7 +4,52 @@ This document describes the automated workflows for AutoREV.
 
 ## Available Workflows
 
-### 1. Build Workflow (`build.yml`)
+### 1. Automated Release (`automated-release.yml`) ⭐ NEW
+
+**Trigger:**
+- Automatically on version tags (e.g., `v11.4.2`, `v1.0.0`)
+- Manual trigger via GitHub Actions UI
+
+**Purpose:** Automatically compile, build, and create GitHub releases
+
+**What it does:**
+1. Triggered when you push a version tag: `git tag v11.4.2 && git push origin v11.4.2`
+2. Extracts version from tag
+3. Fetches Ghidra version from `pom.xml`
+4. Downloads and extracts Ghidra
+5. Copies required JARs
+6. Builds plugin with Maven
+7. Creates release artifacts with checksums
+8. Generates comprehensive release notes
+9. Creates GitHub release automatically
+10. Uploads all artifacts
+
+**Manual Trigger:**
+```
+Actions → Automated Build and Release → Run workflow
+  tag_name: v11.4.2
+  release_notes: "Bug fixes and improvements"
+```
+
+**Usage (Automatic):**
+```bash
+# Create and push a version tag
+git tag v11.4.2
+git push origin v11.4.2
+
+# Workflow automatically triggers and creates release!
+```
+
+**Benefits:**
+- ✅ Fully automated release process
+- ✅ No manual build steps required
+- ✅ Consistent release artifacts
+- ✅ Automatic checksums
+- ✅ Generated release notes
+
+---
+
+### 2. Build Workflow (`build.yml`)
 
 **Trigger:** Push to `main` or Pull Requests
 
@@ -145,7 +190,19 @@ When a new Ghidra version is released:
    Review and merge PR
    ```
 
-3. **Create Release**
+3. **Create Release** (Choose one method)
+
+   **Method A: Automated (Recommended) ⭐**
+   ```
+   git tag v11.4.2
+   git push origin v11.4.2
+     ↓
+   automated-release.yml (automatic)
+     ↓
+   Release created automatically!
+   ```
+
+   **Method B: Manual**
    ```
    Manual trigger: create-release.yml
      ↓
@@ -156,12 +213,29 @@ When a new Ghidra version is released:
 
 ### Quick Reference
 
-| Task | Workflow | When to Use |
-|------|----------|-------------|
-| Monitor for new Ghidra | `check-ghidra-release.yml` | Automatic (weekly) |
-| Update version in code | `auto-update-ghidra.yml` | After new Ghidra release |
-| Create public release | `create-release.yml` | After merging updates |
-| Test build | `build.yml` | Automatic (on push/PR) |
+| Task | Workflow | When to Use | Trigger |
+|------|----------|-------------|---------|
+| **Create release from tag** | `automated-release.yml` | After pushing version tag | **Automatic** |
+| Monitor for new Ghidra | `check-ghidra-release.yml` | Weekly monitoring | Automatic (cron) |
+| Update version in code | `auto-update-ghidra.yml` | After new Ghidra release | Manual |
+| Create release manually | `create-release.yml` | Alternative to tag-based | Manual |
+| Test build | `build.yml` | On every code change | Automatic (push/PR) |
+
+### Recommended Workflow
+
+**For Feature Releases:**
+```bash
+# 1. Merge your features to main
+git checkout main
+git pull
+
+# 2. Create and push version tag
+git tag v11.4.2
+git push origin v11.4.2
+
+# 3. Wait ~5 minutes - release is created automatically!
+# Check: https://github.com/Sarks0/AutoREV/releases
+```
 
 ---
 

@@ -1,0 +1,216 @@
+name: Automated Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags like v11.4.2, v1.0.0, etc.
+  workflow_dispatch:  # Allow manual trigger
+    inputs:
+      tag_name:
+        description: 'Tag name for the release (e.g., v11.4.2)'
+        required: true
+        type: string
+      release_notes:
+        description: 'Additional release notes (optional)'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: get_version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.tag_name }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          # Remove 'v' prefix for version numbers (v11.4.2 -> 11.4.2)
+          VERSION_NUMBER="${VERSION#v}"
+          echo "tag=$VERSION" >> $GITHUB_OUTPUT
+          echo "version=$VERSION_NUMBER" >> $GITHUB_OUTPUT
+          echo "Tag: $VERSION"
+          echo "Version: $VERSION_NUMBER"
+
+      - name: Get Ghidra version from pom.xml
+        id: ghidra_version
+        run: |
+          # Extract Ghidra version from pom.xml
+          GHIDRA_VERSION=$(grep -oP '<version>\K[0-9]+\.[0-9]+\.[0-9]+(?=</version>)' pom.xml | head -1)
+          echo "ghidra_version=$GHIDRA_VERSION" >> $GITHUB_OUTPUT
+          echo "Ghidra Version: $GHIDRA_VERSION"
+
+      - name: Fetch Ghidra release info
+        id: ghidra_info
+        run: |
+          GHIDRA_VERSION="${{ steps.ghidra_version.outputs.ghidra_version }}"
+
+          # Fetch Ghidra release info from GitHub API
+          GHIDRA_RELEASE_INFO=$(curl -s "https://api.github.com/repos/NationalSecurityAgency/ghidra/releases/tags/Ghidra_${GHIDRA_VERSION}_build")
+
+          # Extract asset name to get build date
+          ASSET_NAME=$(echo "$GHIDRA_RELEASE_INFO" | jq -r '.assets[] | select(.name | contains("PUBLIC")) | .name')
+
+          # Extract date from filename (e.g., ghidra_11.4.2_PUBLIC_20250826.zip -> 20250826)
+          GHIDRA_DATE=$(echo "$ASSET_NAME" | grep -oP '\d{8}(?=\.zip)')
+
+          echo "ghidra_date=$GHIDRA_DATE" >> $GITHUB_OUTPUT
+          echo "asset_name=$ASSET_NAME" >> $GITHUB_OUTPUT
+          echo "Ghidra Build Date: $GHIDRA_DATE"
+          echo "Asset Name: $ASSET_NAME"
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Download Ghidra
+        run: |
+          GHIDRA_VERSION="${{ steps.ghidra_version.outputs.ghidra_version }}"
+          ASSET_NAME="${{ steps.ghidra_info.outputs.asset_name }}"
+
+          wget --no-verbose -O ghidra.zip \
+            "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${GHIDRA_VERSION}_build/${ASSET_NAME}"
+          7z x -bd ghidra.zip
+
+      - name: Copy Ghidra libs
+        run: |
+          mkdir -p ./lib
+          GHIDRA_VERSION="${{ steps.ghidra_version.outputs.ghidra_version }}"
+          GHIDRA_LIBS="Features/Base/lib/Base.jar Features/Decompiler/lib/Decompiler.jar Framework/Docking/lib/Docking.jar Framework/Generic/lib/Generic.jar Framework/Project/lib/Project.jar Framework/SoftwareModeling/lib/SoftwareModeling.jar Framework/Utility/lib/Utility.jar Framework/Gui/lib/Gui.jar"
+
+          for libfile in $GHIDRA_LIBS; do
+            echo "Copying ${libfile} to lib/"
+            cp "ghidra_${GHIDRA_VERSION}_PUBLIC/Ghidra/${libfile}" ./lib/
+          done
+
+      - name: Build with Maven
+        run: mvn clean package assembly:single
+
+      - name: Prepare release artifacts
+        run: |
+          mkdir -p release
+          VERSION="${{ steps.get_version.outputs.version }}"
+
+          cp target/GhidraMCP-*-SNAPSHOT.zip "release/GhidraMCP-${VERSION}.zip"
+          cp bridge_mcp_ghidra.py release/
+          cp requirements.txt release/
+
+          # Create checksums
+          cd release
+          sha256sum "GhidraMCP-${VERSION}.zip" > checksums.txt
+          sha256sum bridge_mcp_ghidra.py >> checksums.txt
+          sha256sum requirements.txt >> checksums.txt
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          VERSION="${{ steps.get_version.outputs.version }}"
+          GHIDRA_VERSION="${{ steps.ghidra_version.outputs.ghidra_version }}"
+          CUSTOM_NOTES="${{ inputs.release_notes }}"
+
+          cat > release_notes.md << EOF
+          # AutoREV ${VERSION}
+
+          This release is built for **Ghidra ${GHIDRA_VERSION}**.
+
+          ## What's New
+
+          See [FEATURE_GAP_ANALYSIS.md](https://github.com/Sarks0/AutoREV/blob/main/FEATURE_GAP_ANALYSIS.md) for complete feature list.
+
+          ### Key Features
+
+          **Advanced Analysis (13 endpoints):**
+          - Function analysis with complexity metrics
+          - Program statistics and metadata
+          - Memory operations (read, search, map)
+          - Basic block and control flow analysis
+          - Call graph generation
+          - Data type operations
+
+          **Enhanced Decompilation (4 endpoints):**
+          - Multiple simplification styles (decompile, normalize, firstpass, etc.)
+          - Syntax tree (AST) extraction
+          - Raw decompiler output
+          - Custom decompilation options
+
+          **Bookmark Management (4 endpoints):**
+          - Create, list, and remove bookmarks
+          - Filter by type (NOTE, INFO, WARNING, ERROR, ANALYSIS)
+
+          ## Installation
+
+          ### Ghidra Plugin
+          1. Download \`GhidraMCP-${VERSION}.zip\`
+          2. In Ghidra: \`File\` → \`Install Extensions\` → Click \`+\` → Select the ZIP
+          3. Restart Ghidra
+          4. Enable plugin: \`File\` → \`Configure\` → \`Developer\` → Check **GhidraMCPPlugin**
+
+          ### Python MCP Bridge
+          \`\`\`bash
+          pip install -r requirements.txt
+          python bridge_mcp_ghidra.py --ghidra-server http://127.0.0.1:8080/
+          \`\`\`
+
+          ## Requirements
+
+          - Ghidra ${GHIDRA_VERSION}
+          - Python 3.10+
+          - JDK 21 (for building from source)
+
+          ${CUSTOM_NOTES}
+
+          ## Checksums (SHA-256)
+
+          See \`checksums.txt\` for file verification.
+
+          ---
+
+          **Full Documentation:** [README](https://github.com/Sarks0/AutoREV/blob/main/README.md)
+          EOF
+
+          echo "Release notes generated successfully"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get_version.outputs.tag }}
+          name: AutoREV ${{ steps.get_version.outputs.version }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+          files: |
+            release/GhidraMCP-${{ steps.get_version.outputs.version }}.zip
+            release/bridge_mcp_ghidra.py
+            release/requirements.txt
+            release/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "## Release Created Successfully! :rocket:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag:** ${{ steps.get_version.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ steps.get_version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Ghidra Version:** ${{ steps.ghidra_version.outputs.ghidra_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Build Date:** ${{ steps.ghidra_info.outputs.ghidra_date }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "- GhidraMCP-${{ steps.get_version.outputs.version }}.zip" >> $GITHUB_STEP_SUMMARY
+          echo "- bridge_mcp_ghidra.py" >> $GITHUB_STEP_SUMMARY
+          echo "- requirements.txt" >> $GITHUB_STEP_SUMMARY
+          echo "- checksums.txt" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "[View Release](https://github.com/Sarks0/AutoREV/releases/tag/${{ steps.get_version.outputs.tag }})" >> $GITHUB_STEP_SUMMARY
