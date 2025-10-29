@@ -52,3 +52,9 @@ replay_pid*
 # Third party JAR files from Ghidra
 lib/*.jar
 
+# Claude Code configuration
+.claude/
+CLAUDE.md
+
+# Other
+docs/UPGRADE_SUMMARY.md

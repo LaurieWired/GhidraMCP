@@ -1,0 +1,143 @@
+name: Auto-Update Ghidra Version
+
+on:
+  workflow_dispatch:
+    inputs:
+      ghidra_version:
+        description: 'Ghidra version to update to (e.g., 11.4.2)'
+        required: true
+        type: string
+      ghidra_date:
+        description: 'Ghidra release date (YYYYMMDD, e.g., 20240827)'
+        required: true
+        type: string
+
+jobs:
+  auto-update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create update branch
+        run: |
+          BRANCH_NAME="auto-update/ghidra-${{ inputs.ghidra_version }}"
+          git checkout -b $BRANCH_NAME
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_ENV
+
+      - name: Update build.yml
+        run: |
+          sed -i 's/GHIDRA_VERSION: .*/GHIDRA_VERSION: ${{ inputs.ghidra_version }}/' .github/workflows/build.yml
+          sed -i 's/GHIDRA_DATE: .*/GHIDRA_DATE: ${{ inputs.ghidra_date }}/' .github/workflows/build.yml
+
+      - name: Update pom.xml
+        run: |
+          sed -i 's/<version>11\.[0-9]\+\.[0-9]\+<\/version>/<version>${{ inputs.ghidra_version }}<\/version>/g' pom.xml
+
+      - name: Update extension.properties
+        run: |
+          sed -i 's/version=.*/version=${{ inputs.ghidra_version }}/' src/main/resources/extension.properties
+          sed -i 's/ghidraVersion=.*/ghidraVersion=${{ inputs.ghidra_version }}/' src/main/resources/extension.properties
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Download Ghidra
+        run: |
+          wget --no-verbose -O ghidra.zip https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${{ inputs.ghidra_version }}_build/ghidra_${{ inputs.ghidra_version }}_PUBLIC_${{ inputs.ghidra_date }}.zip
+          7z x -bd ghidra.zip
+
+      - name: Copy Ghidra libs
+        run: |
+          mkdir -p ./lib
+          GHIDRA_LIBS="Features/Base/lib/Base.jar Features/Decompiler/lib/Decompiler.jar Framework/Docking/lib/Docking.jar Framework/Generic/lib/Generic.jar Framework/Project/lib/Project.jar Framework/SoftwareModeling/lib/SoftwareModeling.jar Framework/Utility/lib/Utility.jar Framework/Gui/lib/Gui.jar"
+          for libfile in $GHIDRA_LIBS; do
+            echo "Copying ${libfile} to lib/"
+            cp ghidra_${{ inputs.ghidra_version }}_PUBLIC/Ghidra/${libfile} ./lib/
+          done
+
+      - name: Test build with Maven
+        id: build
+        continue-on-error: true
+        run: mvn clean package assembly:single
+
+      - name: Commit changes
+        run: |
+          git add .github/workflows/build.yml pom.xml src/main/resources/extension.properties
+          git commit -m "chore: update to Ghidra ${{ inputs.ghidra_version }}
+
+          - Updated Ghidra version to ${{ inputs.ghidra_version }}
+          - Updated release date to ${{ inputs.ghidra_date }}
+          - Updated all version references in pom.xml and extension.properties
+          - Build test: ${{ steps.build.outcome }}
+
+          Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
+
+      - name: Push changes
+        run: |
+          git push origin ${{ env.branch_name }}
+
+      - name: Create Pull Request
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const buildStatus = '${{ steps.build.outcome }}';
+            const buildBadge = buildStatus === 'success' ? '✅' : '⚠️';
+
+            const prBody = `## Automated Ghidra Version Update
+
+            This PR updates GhidraMCP to support Ghidra **${{ inputs.ghidra_version }}**.
+
+            ### Changes
+            - Updated \`.github/workflows/build.yml\` with new Ghidra version and date
+            - Updated \`pom.xml\` dependency versions
+            - Updated \`src/main/resources/extension.properties\`
+
+            ### Build Status
+            ${buildBadge} Build test: **${buildStatus}**
+
+            ${buildStatus !== 'success' ? '⚠️ **Warning:** The build test failed. Please review the changes and test manually before merging.' : '✅ Build test passed successfully!'}
+
+            ### Action Items
+            - [ ] Review the changes
+            - [ ] Check [Ghidra ${{ inputs.ghidra_version }} release notes](https://github.com/NationalSecurityAgency/ghidra/releases/tag/Ghidra_${{ inputs.ghidra_version }}_build) for API changes
+            - [ ] Test the plugin manually in Ghidra ${{ inputs.ghidra_version }}
+            - [ ] Update README/documentation if needed
+            - [ ] Merge when ready
+
+            ---
+            *This PR was automatically created by the Auto-Update Ghidra Version workflow.*`;
+
+            const { data: pr } = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Update to Ghidra ${{ inputs.ghidra_version }}`,
+              head: '${{ env.branch_name }}',
+              base: 'main',
+              body: prBody
+            });
+
+            console.log(`Pull request created: ${pr.html_url}`);
+
+            // Add labels
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              labels: ['ghidra-update', 'automation']
+            });

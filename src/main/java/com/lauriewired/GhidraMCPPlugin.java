@@ -341,6 +341,78 @@ public class GhidraMCPPlugin extends Plugin {
             sendResponse(exchange, listDefinedStrings(offset, limit, filter));
         });
 
+        // Health check endpoint
+        server.createContext("/health", exchange -> {
+            String status = "healthy";
+            boolean hasProgramLoaded = false;
+            String programName = "none";
+
+            try {
+                ProgramManager pm = tool.getService(ProgramManager.class);
+                if (pm != null && pm.getCurrentProgram() != null) {
+                    hasProgramLoaded = true;
+                    programName = pm.getCurrentProgram().getName();
+                }
+            } catch (Exception e) {
+                status = "degraded";
+            }
+
+            String healthResponse = String.format(
+                "{\"status\":\"%s\",\"server\":\"running\",\"program_loaded\":%b,\"program_name\":\"%s\"}",
+                status, hasProgramLoaded, programName
+            );
+            sendJsonResponse(exchange, healthResponse, 200);
+        });
+
+        // Version endpoint
+        server.createContext("/version", exchange -> {
+            String version = "11.4.2";  // GhidraMCP version (matches Ghidra version)
+            String pluginName = "GhidraMCP";
+
+            String versionResponse = String.format(
+                "{\"plugin\":\"%s\",\"version\":\"%s\",\"ghidra_version\":\"%s\"}",
+                pluginName, version, version
+            );
+            sendJsonResponse(exchange, versionResponse, 200);
+        });
+
+        // API info endpoint - lists all available endpoints
+        server.createContext("/api/info", exchange -> {
+            StringBuilder info = new StringBuilder();
+            info.append("GhidraMCP API Endpoints:\n\n");
+            info.append("GET  /health - Health check\n");
+            info.append("GET  /version - Version information\n");
+            info.append("GET  /api/info - This endpoint\n\n");
+            info.append("GET  /methods?offset=0&limit=100 - List function names\n");
+            info.append("GET  /classes?offset=0&limit=100 - List class names\n");
+            info.append("GET  /list_functions?offset=0&limit=100 - List all functions\n");
+            info.append("GET  /segments?offset=0&limit=100 - List memory segments\n");
+            info.append("GET  /imports?offset=0&limit=100 - List imports\n");
+            info.append("GET  /exports?offset=0&limit=100 - List exports\n");
+            info.append("GET  /namespaces?offset=0&limit=100 - List namespaces\n");
+            info.append("GET  /data?offset=0&limit=100 - List data items\n");
+            info.append("GET  /strings?offset=0&limit=100&filter=text - List strings\n");
+            info.append("GET  /get_current_address - Get current cursor address\n");
+            info.append("GET  /get_current_function - Get current function\n");
+            info.append("GET  /searchFunctions?query=name - Search functions\n");
+            info.append("GET  /get_function_by_address?address=0x... - Get function info\n");
+            info.append("GET  /xrefs_to?address=0x... - Get references TO address\n");
+            info.append("GET  /xrefs_from?address=0x... - Get references FROM address\n");
+            info.append("GET  /function_xrefs?name=func - Get function cross-references\n\n");
+            info.append("POST /decompile - Decompile function by name\n");
+            info.append("POST /decompile_function?address=0x... - Decompile by address\n");
+            info.append("POST /disassemble_function?address=0x... - Disassemble by address\n");
+            info.append("POST /renameFunction - Rename function (oldName, newName)\n");
+            info.append("POST /rename_function_by_address?address=0x...&name=new - Rename by address\n");
+            info.append("POST /renameData - Rename data (address, newName)\n");
+            info.append("POST /renameVariable - Rename variable (functionName, oldName, newName)\n");
+            info.append("POST /set_function_prototype - Set function signature\n");
+            info.append("POST /set_local_variable_type - Set variable type\n");
+            info.append("POST /set_decompiler_comment - Add pseudocode comment\n");
+            info.append("POST /set_disassembly_comment - Add assembly comment\n");
+            sendResponse(exchange, info.toString());
+        });
+
         server.setExecutor(null);
         new Thread(() -> {
             try {
@@ -1636,6 +1708,28 @@ public class GhidraMCPPlugin extends Plugin {
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);
         }
+    }
+
+    /**
+     * Send a JSON response with a specific HTTP status code
+     */
+    private void sendJsonResponse(HttpExchange exchange, String jsonResponse, int statusCode) throws IOException {
+        byte[] bytes = jsonResponse.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");  // Allow CORS
+        exchange.sendResponseHeaders(statusCode, bytes.length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(bytes);
+        }
+    }
+
+    /**
+     * Send an error response with proper HTTP status code
+     */
+    private void sendErrorResponse(HttpExchange exchange, String errorMessage, int statusCode) throws IOException {
+        String errorJson = String.format("{\"error\":\"%s\",\"status\":%d}",
+            errorMessage.replace("\"", "\\\""), statusCode);
+        sendJsonResponse(exchange, errorJson, statusCode);
     }
 
     @Override

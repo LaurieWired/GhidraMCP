@@ -273,12 +273,12 @@ def get_function_xrefs(name: str, offset: int = 0, limit: int = 100) -> list:
 def list_strings(offset: int = 0, limit: int = 2000, filter: str = None) -> list:
     """
     List all defined strings in the program with their addresses.
-    
+
     Args:
         offset: Pagination offset (default: 0)
         limit: Maximum number of strings to return (default: 2000)
         filter: Optional filter to match within string content
-        
+
     Returns:
         List of strings with their addresses
     """
@@ -286,6 +286,56 @@ def list_strings(offset: int = 0, limit: int = 2000, filter: str = None) -> list
     if filter:
         params["filter"] = filter
     return safe_get("strings", params)
+
+@mcp.tool()
+def health_check() -> str:
+    """
+    Check the health status of the Ghidra MCP server.
+
+    Returns JSON with:
+    - status: "healthy" or "degraded"
+    - server: "running"
+    - program_loaded: true/false
+    - program_name: name of currently loaded program
+    """
+    try:
+        url = urljoin(ghidra_server_url, "health")
+        response = requests.get(url, timeout=5)
+        if response.ok:
+            return response.text
+        else:
+            return f"{{\"status\":\"error\",\"code\":{response.status_code}}}"
+    except Exception as e:
+        return f"{{\"status\":\"unreachable\",\"error\":\"{str(e)}\"}}"
+
+@mcp.tool()
+def get_version() -> str:
+    """
+    Get version information for the GhidraMCP plugin and Ghidra.
+
+    Returns JSON with:
+    - plugin: Plugin name
+    - version: Plugin version
+    - ghidra_version: Ghidra version
+    """
+    try:
+        url = urljoin(ghidra_server_url, "version")
+        response = requests.get(url, timeout=5)
+        if response.ok:
+            return response.text
+        else:
+            return f"{{\"error\":\"Failed to get version\",\"code\":{response.status_code}}}"
+    except Exception as e:
+        return f"{{\"error\":\"Request failed: {str(e)}\"}}"
+
+@mcp.tool()
+def get_api_info() -> list:
+    """
+    Get information about all available API endpoints.
+
+    Returns a list of available endpoints with their descriptions.
+    """
+    return safe_get("api/info")
 
 def main():
     parser = argparse.ArgumentParser(description="MCP server for Ghidra")
