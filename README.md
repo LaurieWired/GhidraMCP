@@ -44,7 +44,7 @@ Video Installation Guide:
 
 https://github.com/user-attachments/assets/75f0c176-6da1-48dc-ad96-c182eb4648c3
 
-
+The Python MCP client can be installed with either `pipx install GhidraMCP` or `uv tool install GhidraMCP`.
 
 ## MCP Clients
 
@@ -75,12 +75,21 @@ Alternatively, edit this file directly:
 
 The server IP and port are configurable and should be set to point to the target Ghidra instance. If not set, both will default to localhost:8080.
 
+If the GhidraMCP Python client was installed with `pipx` or `uv tool`, the first argument can be replaced with `bridge_mcp_ghidra` instead of giving an absolute path.
+
 ## Example 2: Cline
 To use GhidraMCP with [Cline](https://cline.bot), this requires manually running the MCP server as well. First run the following command:
 
 ```
 python bridge_mcp_ghidra.py --transport sse --mcp-host 127.0.0.1 --mcp-port 8081 --ghidra-server http://127.0.0.1:8080/
 ```
+
+Or if the GhidraMCP Python client was installed with `pipx` or `uv tool`:
+
+```
+bridge_mcp_ghidra --transport sse --mcp-host 127.0.0.1 --mcp-port 8081 --ghidra-server http://127.0.0.1:8080/
+```
+
 
 The only *required* argument is the transport. If all other arguments are unspecified, they will default to the above. Once the MCP server is running, open up Cline and select `MCP Servers` at the top.
 
@@ -97,6 +106,8 @@ Another MCP client that supports multiple models on the backend is [5ire](https:
 1. Tool Key: ghidra
 2. Name: GhidraMCP
 3. Command: `python /ABSOLUTE_PATH_TO/bridge_mcp_ghidra.py`
+
+If the GhidraMCP Python client was installed with `pipx` or `uv tool`, the command can be `bridge_mcp_ghidra` without needing to specify the python interpreter or giving an absolute path.
 
 # Building from Source
 1. Copy the following files from your Ghidra directory to this project's `lib/` directory:

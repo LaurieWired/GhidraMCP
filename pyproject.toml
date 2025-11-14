@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling>=1.20", "hatch-vcs>=0.5.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ghidramcp"
+dynamic = ["version"]
+description = "Model Context Protocol server for Ghidra reverse engineering"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [
+    {name = "LaurieWired"}
+]
+keywords = ["ghidra", "reverse-engineering", "mcp", "model-context-protocol"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Disassemblers",
+]
+dependencies = [
+    "mcp>=1.2.0,<2",
+    "requests>=2,<3",
+]
+
+[project.urls]
+Homepage = "https://github.com/LaurieWired/GhidraMCP"
+Repository = "https://github.com/LaurieWired/GhidraMCP"
+Issues = "https://github.com/LaurieWired/GhidraMCP/issues"
+
+[project.scripts]
+bridge_mcp_ghidra = "bridge_mcp_ghidra:main"
+
+[tool.hatch.build]
+include = [
+    "bridge_mcp_ghidra.py",
+    "README.md",
+    "LICENSE",
+]
+
+[tool.hatch.version]
+source = "vcs"
+tag-pattern = "(?P<version>\\d+\\.\\d+(?:\\.\\d+)?)"
+fallback-version = "0.0"
+
+[tool.hatch.build.targets.wheel]
+only-include = [
+    "bridge_mcp_ghidra.py"
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "bridge_mcp_ghidra.py",
+    "README.md",
+    "LICENSE",
+]

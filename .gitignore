@@ -45,6 +45,11 @@ mvnw.cmd
 .env
 .env.*
 
+# Python things
+.venv
+venv
+dist
+
 # Java crash logs (if any)
 hs_err_pid*
 replay_pid*

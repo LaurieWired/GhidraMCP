@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to PyPI"
+        type: boolean
+        required: false
+        default: false
+      pretend_version:
+        description: "Override detected version (e.g. 1.4.1) for build only"
+        type: string
+        required: false
+  push:
+    tags:
+      - "*.*"
+      - "*.*.*"
+
+jobs:
+  build-wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Build wheel
+        env:
+          SETUPTOOLS_SCM_PRETEND_VERSION: ${{ inputs.pretend_version }}
+        run: |
+          pip install build twine
+          python -m build
+          python -m twine check dist/*
+
+      - name: Show built distributions
+        run: ls -1 dist
+
+      - name: Upload Python package dist artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: python-package-dist
+          path: dist
+
+  pypi-publish:
+    name: Upload release to PyPI
+    runs-on: ubuntu-latest
+    needs: build-wheel
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags')) || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
+    environment:
+      name: pypi
+      url: https://pypi.org/p/ghidramcp
+    permissions:
+      id-token: write
+    steps:
+      - name: Download Python package dist artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: python-package-dist
+          path: dist
+
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
