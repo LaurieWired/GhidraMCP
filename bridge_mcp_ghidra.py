@@ -228,12 +228,12 @@ def set_local_variable_type(function_address: str, variable_name: str, new_type:
 def get_xrefs_to(address: str, offset: int = 0, limit: int = 100) -> list:
     """
     Get all references to the specified address (xref to).
-    
+
     Args:
         address: Target address in hex format (e.g. "0x1400010a0")
         offset: Pagination offset (default: 0)
         limit: Maximum number of references to return (default: 100)
-        
+
     Returns:
         List of references to the specified address
     """
@@ -243,12 +243,12 @@ def get_xrefs_to(address: str, offset: int = 0, limit: int = 100) -> list:
 def get_xrefs_from(address: str, offset: int = 0, limit: int = 100) -> list:
     """
     Get all references from the specified address (xref from).
-    
+
     Args:
         address: Source address in hex format (e.g. "0x1400010a0")
         offset: Pagination offset (default: 0)
         limit: Maximum number of references to return (default: 100)
-        
+
     Returns:
         List of references from the specified address
     """
@@ -258,12 +258,12 @@ def get_xrefs_from(address: str, offset: int = 0, limit: int = 100) -> list:
 def get_function_xrefs(name: str, offset: int = 0, limit: int = 100) -> list:
     """
     Get all references to the specified function by name.
-    
+
     Args:
         name: Function name to search for
         offset: Pagination offset (default: 0)
         limit: Maximum number of references to return (default: 100)
-        
+
     Returns:
         List of references to the specified function
     """
@@ -273,12 +273,12 @@ def get_function_xrefs(name: str, offset: int = 0, limit: int = 100) -> list:
 def list_strings(offset: int = 0, limit: int = 2000, filter: str = None) -> list:
     """
     List all defined strings in the program with their addresses.
-    
+
     Args:
         offset: Pagination offset (default: 0)
         limit: Maximum number of strings to return (default: 2000)
         filter: Optional filter to match within string content
-        
+
     Returns:
         List of strings with their addresses
     """
@@ -286,6 +286,231 @@ def list_strings(offset: int = 0, limit: int = 2000, filter: str = None) -> list
     if filter:
         params["filter"] = filter
     return safe_get("strings", params)
+
+@mcp.tool()
+def search_variables(pattern: str, offset: int = 0, limit: int = 100) -> list:
+    """
+    Search for variables across all functions whose name matches a pattern.
+
+    Args:
+        pattern: The pattern to search for (e.g., "param_", "iVar", "local_")
+        offset: Pagination offset (default: 0)
+        limit: Maximum number of results to return (default: 100)
+
+    Returns:
+        List of matches in format: "FunctionName @ address: variableName (type)"
+
+    Note: This operation can be slow as it decompiles functions to find variables.
+    """
+    if not pattern:
+        return ["Error: pattern string is required"]
+    return safe_get("searchVariables", {"pattern": pattern, "offset": offset, "limit": limit})
+
+
+# ============================================================================
+# Structure/Type Management Functions
+# ============================================================================
+
+@mcp.tool()
+def create_struct(name: str, size: int = 0, category: str = None) -> str:
+    """
+    Create a new structure data type.
+
+    Args:
+        name: Name of the structure (e.g., "LFGCooldownNode")
+        size: Initial size in bytes (0 for undefined/growable structure)
+        category: Category path for the structure (e.g., "/WoW" or None for root)
+
+    Returns:
+        Success message with structure path, or error message
+
+    Example:
+        create_struct("SavedInstanceEntry", 32, "/WoW/LFG")
+    """
+    data = {"name": name}
+    if size > 0:
+        data["size"] = str(size)
+    if category:
+        data["category"] = category
+    return safe_post("create_struct", data)
+
+
+@mcp.tool()
+def add_struct_field(struct_name: str, field_type: str, field_name: str,
+                     offset: int = -1, field_size: int = 0) -> str:
+    """
+    Add a field to an existing structure.
+
+    Args:
+        struct_name: Name of the structure to modify
+        field_type: Data type of the field (e.g., "uint", "int", "char", "pointer")
+        field_name: Name for the new field
+        offset: Byte offset for the field (-1 to append at end)
+        field_size: Size override in bytes (0 to use type's natural size)
+
+    Returns:
+        Success or error message
+
+    Example:
+        add_struct_field("LFGCooldownNode", "uint", "dungeonId", offset=0x08)
+        add_struct_field("LFGCooldownNode", "pointer", "pNextNode", offset=0x04)
+    """
+    data = {
+        "struct_name": struct_name,
+        "field_type": field_type,
+        "field_name": field_name,
+        "offset": str(offset)
+    }
+    if field_size > 0:
+        data["field_size"] = str(field_size)
+    return safe_post("add_struct_field", data)
+
+
+@mcp.tool()
+def list_structs(offset: int = 0, limit: int = 100, filter: str = None) -> list:
+    """
+    List all structure types defined in the program.
+
+    Args:
+        offset: Pagination offset (default: 0)
+        limit: Maximum number of structures to return (default: 100)
+        filter: Optional filter to match structure names
+
+    Returns:
+        List of structure names with their sizes and field counts
+    """
+    params = {"offset": offset, "limit": limit}
+    if filter:
+        params["filter"] = filter
+    return safe_get("list_structs", params)
+
+
+@mcp.tool()
+def get_struct(name: str) -> str:
+    """
+    Get detailed information about a structure including all fields.
+
+    Args:
+        name: Name of the structure
+
+    Returns:
+        Structure details with all fields, offsets, types, and sizes
+
+    Example output:
+        Structure: LFGCooldownNode
+        Path: /WoW/LFG/LFGCooldownNode
+        Size: 24 bytes
+        Fields (5):
+          +0x0000: uint flags (size: 4)
+          +0x0004: pointer pNextNode (size: 4)
+          +0x0008: uint dungeonId (size: 4)
+          ...
+    """
+    return "\n".join(safe_get("get_struct", {"name": name}))
+
+
+@mcp.tool()
+def apply_struct_at_address(address: str, struct_name: str) -> str:
+    """
+    Apply a structure type at a specific memory address.
+
+    Args:
+        address: Memory address in hex format (e.g., "0x00acdc00")
+        struct_name: Name of the structure to apply
+
+    Returns:
+        Success or error message
+
+    Example:
+        apply_struct_at_address("0x00bcfae8", "SavedInstanceArray")
+    """
+    return safe_post("apply_struct_at_address", {
+        "address": address,
+        "struct_name": struct_name
+    })
+
+
+@mcp.tool()
+def create_enum(name: str, size: int = 4, category: str = None) -> str:
+    """
+    Create a new enum data type.
+
+    Args:
+        name: Name of the enum (e.g., "LFG_LOCKSTATUS")
+        size: Size in bytes (1, 2, 4, or 8; default: 4)
+        category: Category path for the enum (e.g., "/WoW/Enums")
+
+    Returns:
+        Success message with enum path, or error message
+
+    Example:
+        create_enum("LFG_LOCKSTATUS", 4, "/WoW/LFG")
+    """
+    data = {"name": name, "size": str(size)}
+    if category:
+        data["category"] = category
+    return safe_post("create_enum", data)
+
+
+@mcp.tool()
+def add_enum_value(enum_name: str, value_name: str, value: int) -> str:
+    """
+    Add a value to an existing enum.
+
+    Args:
+        enum_name: Name of the enum to modify
+        value_name: Name for the enum value
+        value: Numeric value
+
+    Returns:
+        Success or error message
+
+    Example:
+        add_enum_value("LFG_LOCKSTATUS", "NOT_LOCKED", 0)
+        add_enum_value("LFG_LOCKSTATUS", "TOO_LOW_LEVEL", 1)
+        add_enum_value("LFG_LOCKSTATUS", "RAID_LOCKED", 6)
+    """
+    return safe_post("add_enum_value", {
+        "enum_name": enum_name,
+        "value_name": value_name,
+        "value": str(value)
+    })
+
+
+@mcp.tool()
+def list_types(offset: int = 0, limit: int = 100, category: str = None) -> list:
+    """
+    List all data types, optionally filtered by category.
+
+    Args:
+        offset: Pagination offset (default: 0)
+        limit: Maximum number of types to return (default: 100)
+        category: Category path to list (e.g., "/WoW" or None for all)
+
+    Returns:
+        List of type names with their kinds and sizes
+    """
+    params = {"offset": offset, "limit": limit}
+    if category:
+        params["category"] = category
+    return safe_get("list_types", params)
+
+
+@mcp.tool()
+def delete_struct(name: str) -> str:
+    """
+    Delete a structure or other data type.
+
+    Args:
+        name: Name of the structure/type to delete
+
+    Returns:
+        Success or error message
+
+    Warning: This will fail if the type is in use elsewhere.
+    """
+    return safe_post("delete_struct", {"name": name})
+
 
 def main():
     parser = argparse.ArgumentParser(description="MCP server for Ghidra")
@@ -298,12 +523,12 @@ def main():
     parser.add_argument("--transport", type=str, default="stdio", choices=["stdio", "sse"],
                         help="Transport protocol for MCP, default: stdio")
     args = parser.parse_args()
-    
+
     # Use the global variable to ensure it's properly updated
     global ghidra_server_url
     if args.ghidra_server:
         ghidra_server_url = args.ghidra_server
-    
+
     if args.transport == "sse":
         try:
             # Set up logging
@@ -332,7 +557,6 @@ def main():
             logger.info("Server stopped by user")
     else:
         mcp.run()
-        
+
 if __name__ == "__main__":
     main()
-
