@@ -2,7 +2,7 @@
 # requires-python = ">=3.10"
 # dependencies = [
 #     "requests>=2,<3",
-#     "mcp>=1.2.0,<2",
+#     "mcp>=1.8.0,<2",
 # ]
 # ///
 
@@ -13,6 +13,7 @@ import logging
 from urllib.parse import urljoin
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 DEFAULT_GHIDRA_SERVER = "http://127.0.0.1:8080/"
 
@@ -57,77 +58,132 @@ def safe_post(endpoint: str, data: dict | str) -> str:
     except Exception as e:
         return f"Request failed: {str(e)}"
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="List Methods",
+        readOnlyHint=True,
+    ),
+)
 def list_methods(offset: int = 0, limit: int = 100) -> list:
     """
     List all function names in the program with pagination.
     """
     return safe_get("methods", {"offset": offset, "limit": limit})
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="List Classes",
+        readOnlyHint=True,
+    ),
+)
 def list_classes(offset: int = 0, limit: int = 100) -> list:
     """
     List all namespace/class names in the program with pagination.
     """
     return safe_get("classes", {"offset": offset, "limit": limit})
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Decompile Function",
+        readOnlyHint=True,
+    ),
+)
 def decompile_function(name: str) -> str:
     """
     Decompile a specific function by name and return the decompiled C code.
     """
     return safe_post("decompile", name)
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Rename Function",
+        destructiveHint=True,
+    ),
+)
 def rename_function(old_name: str, new_name: str) -> str:
     """
     Rename a function by its current name to a new user-defined name.
     """
     return safe_post("renameFunction", {"oldName": old_name, "newName": new_name})
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Rename Data",
+        destructiveHint=True,
+    ),
+)
 def rename_data(address: str, new_name: str) -> str:
     """
     Rename a data label at the specified address.
     """
     return safe_post("renameData", {"address": address, "newName": new_name})
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="List Segments",
+        readOnlyHint=True,
+    ),
+)
 def list_segments(offset: int = 0, limit: int = 100) -> list:
     """
     List all memory segments in the program with pagination.
     """
     return safe_get("segments", {"offset": offset, "limit": limit})
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="List Imports",
+        readOnlyHint=True,
+    ),
+)
 def list_imports(offset: int = 0, limit: int = 100) -> list:
     """
     List imported symbols in the program with pagination.
     """
     return safe_get("imports", {"offset": offset, "limit": limit})
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="List Exports",
+        readOnlyHint=True,
+    ),
+)
 def list_exports(offset: int = 0, limit: int = 100) -> list:
     """
     List exported functions/symbols with pagination.
     """
     return safe_get("exports", {"offset": offset, "limit": limit})
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="List Namespaces",
+        readOnlyHint=True,
+    ),
+)
 def list_namespaces(offset: int = 0, limit: int = 100) -> list:
     """
     List all non-global namespaces in the program with pagination.
     """
     return safe_get("namespaces", {"offset": offset, "limit": limit})
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="List Data Items",
+        readOnlyHint=True,
+    ),
+)
 def list_data_items(offset: int = 0, limit: int = 100) -> list:
     """
     List defined data labels and their values with pagination.
     """
     return safe_get("data", {"offset": offset, "limit": limit})
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Search Functions By Name",
+        readOnlyHint=True,
+    ),
+)
 def search_functions_by_name(query: str, offset: int = 0, limit: int = 100) -> list:
     """
     Search for functions whose name contains the given substring.
@@ -136,7 +192,12 @@ def search_functions_by_name(query: str, offset: int = 0, limit: int = 100) -> l
         return ["Error: query string is required"]
     return safe_get("searchFunctions", {"query": query, "offset": offset, "limit": limit})
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Rename Variable",
+        destructiveHint=True,
+    ),
+)
 def rename_variable(function_name: str, old_name: str, new_name: str) -> str:
     """
     Rename a local variable within a function.
@@ -147,138 +208,213 @@ def rename_variable(function_name: str, old_name: str, new_name: str) -> str:
         "newName": new_name
     })
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Get Function By Address",
+        readOnlyHint=True,
+    ),
+)
 def get_function_by_address(address: str) -> str:
     """
     Get a function by its address.
     """
     return "\n".join(safe_get("get_function_by_address", {"address": address}))
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Get Current Address",
+        readOnlyHint=True,
+    ),
+)
 def get_current_address() -> str:
     """
     Get the address currently selected by the user.
     """
     return "\n".join(safe_get("get_current_address"))
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Get Current Function",
+        readOnlyHint=True,
+    ),
+)
 def get_current_function() -> str:
     """
     Get the function currently selected by the user.
     """
     return "\n".join(safe_get("get_current_function"))
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="List Functions",
+        readOnlyHint=True,
+    ),
+)
 def list_functions() -> list:
     """
     List all functions in the database.
     """
     return safe_get("list_functions")
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Decompile Function By Address",
+        readOnlyHint=True,
+    ),
+)
 def decompile_function_by_address(address: str) -> str:
     """
     Decompile a function at the given address.
     """
     return "\n".join(safe_get("decompile_function", {"address": address}))
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Disassemble Function",
+        readOnlyHint=True,
+    ),
+)
 def disassemble_function(address: str) -> list:
     """
     Get assembly code (address: instruction; comment) for a function.
     """
     return safe_get("disassemble_function", {"address": address})
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Set Decompiler Comment",
+        destructiveHint=True,
+    ),
+)
 def set_decompiler_comment(address: str, comment: str) -> str:
     """
     Set a comment for a given address in the function pseudocode.
     """
     return safe_post("set_decompiler_comment", {"address": address, "comment": comment})
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Set Disassembly Comment",
+        destructiveHint=True,
+    ),
+)
 def set_disassembly_comment(address: str, comment: str) -> str:
     """
     Set a comment for a given address in the function disassembly.
     """
     return safe_post("set_disassembly_comment", {"address": address, "comment": comment})
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Rename Function By Address",
+        destructiveHint=True,
+    ),
+)
 def rename_function_by_address(function_address: str, new_name: str) -> str:
     """
     Rename a function by its address.
     """
     return safe_post("rename_function_by_address", {"function_address": function_address, "new_name": new_name})
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Set Function Prototype",
+        destructiveHint=True,
+    ),
+)
 def set_function_prototype(function_address: str, prototype: str) -> str:
     """
     Set a function's prototype.
     """
     return safe_post("set_function_prototype", {"function_address": function_address, "prototype": prototype})
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Set Local Variable Type",
+        destructiveHint=True,
+    ),
+)
 def set_local_variable_type(function_address: str, variable_name: str, new_type: str) -> str:
     """
     Set a local variable's type.
     """
     return safe_post("set_local_variable_type", {"function_address": function_address, "variable_name": variable_name, "new_type": new_type})
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Get XRefs To",
+        readOnlyHint=True,
+    ),
+)
 def get_xrefs_to(address: str, offset: int = 0, limit: int = 100) -> list:
     """
     Get all references to the specified address (xref to).
-    
+
     Args:
         address: Target address in hex format (e.g. "0x1400010a0")
         offset: Pagination offset (default: 0)
         limit: Maximum number of references to return (default: 100)
-        
+
     Returns:
         List of references to the specified address
     """
     return safe_get("xrefs_to", {"address": address, "offset": offset, "limit": limit})
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Get XRefs From",
+        readOnlyHint=True,
+    ),
+)
 def get_xrefs_from(address: str, offset: int = 0, limit: int = 100) -> list:
     """
     Get all references from the specified address (xref from).
-    
+
     Args:
         address: Source address in hex format (e.g. "0x1400010a0")
         offset: Pagination offset (default: 0)
         limit: Maximum number of references to return (default: 100)
-        
+
     Returns:
         List of references from the specified address
     """
     return safe_get("xrefs_from", {"address": address, "offset": offset, "limit": limit})
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Get Function XRefs",
+        readOnlyHint=True,
+    ),
+)
 def get_function_xrefs(name: str, offset: int = 0, limit: int = 100) -> list:
     """
     Get all references to the specified function by name.
-    
+
     Args:
         name: Function name to search for
         offset: Pagination offset (default: 0)
         limit: Maximum number of references to return (default: 100)
-        
+
     Returns:
         List of references to the specified function
     """
     return safe_get("function_xrefs", {"name": name, "offset": offset, "limit": limit})
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="List Strings",
+        readOnlyHint=True,
+    ),
+)
 def list_strings(offset: int = 0, limit: int = 2000, filter: str = None) -> list:
     """
     List all defined strings in the program with their addresses.
-    
+
     Args:
         offset: Pagination offset (default: 0)
         limit: Maximum number of strings to return (default: 2000)
         filter: Optional filter to match within string content
-        
+
     Returns:
         List of strings with their addresses
     """
@@ -298,12 +434,12 @@ def main():
     parser.add_argument("--transport", type=str, default="stdio", choices=["stdio", "sse"],
                         help="Transport protocol for MCP, default: stdio")
     args = parser.parse_args()
-    
+
     # Use the global variable to ensure it's properly updated
     global ghidra_server_url
     if args.ghidra_server:
         ghidra_server_url = args.ghidra_server
-    
+
     if args.transport == "sse":
         try:
             # Set up logging
@@ -332,7 +468,6 @@ def main():
             logger.info("Server stopped by user")
     else:
         mcp.run()
-        
+
 if __name__ == "__main__":
     main()
-
