@@ -98,6 +98,12 @@ Another MCP client that supports multiple models on the backend is [5ire](https:
 2. Name: GhidraMCP
 3. Command: `python /ABSOLUTE_PATH_TO/bridge_mcp_ghidra.py`
 
+## Example 4: Claude CLI
+To add the MCP server to Claude CLI, use the following command:
+```bash
+ claude mcp add ghidra "python3" "ABSOLUTE_PATH_TO/bridge_mcp_ghidra.py" "--ghidra-server" "http://localhost:8080"
+```
+
 # Building from Source
 1. Copy the following files from your Ghidra directory to this project's `lib/` directory:
 - `Ghidra/Features/Base/lib/Base.jar`
