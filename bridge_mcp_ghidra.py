@@ -128,7 +128,7 @@ def list_data_items(offset: int = 0, limit: int = 100) -> list:
     return safe_get("data", {"offset": offset, "limit": limit})
 
 @mcp.tool()
-def search_functions_by_name(query: str, offset: int = 0, limit: int = 100) -> list:
+def search_functions(query: str, offset: int = 0, limit: int = 100) -> list:
     """
     Search for functions whose name contains the given substring.
     """
@@ -148,7 +148,7 @@ def rename_variable(function_name: str, old_name: str, new_name: str) -> str:
     })
 
 @mcp.tool()
-def get_function_by_address(address: str) -> str:
+def get_func_by_addr(address: str) -> str:
     """
     Get a function by its address.
     """
@@ -176,7 +176,7 @@ def list_functions() -> list:
     return safe_get("list_functions")
 
 @mcp.tool()
-def decompile_function_by_address(address: str) -> str:
+def decompile_by_addr(address: str) -> str:
     """
     Decompile a function at the given address.
     """
@@ -190,35 +190,35 @@ def disassemble_function(address: str) -> list:
     return safe_get("disassemble_function", {"address": address})
 
 @mcp.tool()
-def set_decompiler_comment(address: str, comment: str) -> str:
+def set_decomp_comment(address: str, comment: str) -> str:
     """
     Set a comment for a given address in the function pseudocode.
     """
     return safe_post("set_decompiler_comment", {"address": address, "comment": comment})
 
 @mcp.tool()
-def set_disassembly_comment(address: str, comment: str) -> str:
+def set_disasm_comment(address: str, comment: str) -> str:
     """
     Set a comment for a given address in the function disassembly.
     """
     return safe_post("set_disassembly_comment", {"address": address, "comment": comment})
 
 @mcp.tool()
-def rename_function_by_address(function_address: str, new_name: str) -> str:
+def rename_func_by_addr(function_address: str, new_name: str) -> str:
     """
     Rename a function by its address.
     """
     return safe_post("rename_function_by_address", {"function_address": function_address, "new_name": new_name})
 
 @mcp.tool()
-def set_function_prototype(function_address: str, prototype: str) -> str:
+def set_func_prototype(function_address: str, prototype: str) -> str:
     """
     Set a function's prototype.
     """
     return safe_post("set_function_prototype", {"function_address": function_address, "prototype": prototype})
 
 @mcp.tool()
-def set_local_variable_type(function_address: str, variable_name: str, new_type: str) -> str:
+def set_lvar_type(function_address: str, variable_name: str, new_type: str) -> str:
     """
     Set a local variable's type.
     """
@@ -335,4 +335,3 @@ def main():
         
 if __name__ == "__main__":
     main()
-
