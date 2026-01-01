@@ -1,0 +1,13 @@
+{
+    "mcpServers": {
+        "ghidra-mcp": {
+            "command": "python",
+            "args": [
+                "bridge_mcp_ghidra.py"
+            ],
+            "env": {
+                "GHIDRA_SERVER": "http://127.0.0.1:8089/"
+            }
+        }
+    }
+}

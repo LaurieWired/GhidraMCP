@@ -1,2 +1,17 @@
-mcp==1.5.0
-requests==2.32.3
+# GhidraMCP - Production Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core MCP server framework
+mcp>=1.5.0,<2.0.0
+
+# HTTP client library
+requests>=2.28.0,<3.0.0
+
+# URL parsing utilities (included in stdlib but explicit for clarity)
+# urllib.parse - included in Python standard library
+
+# JSON handling (included in stdlib)
+# json - included in Python standard library
+
+# For development and testing, install additional requirements:
+# pip install -r requirements-test.txt

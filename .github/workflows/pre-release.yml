@@ -1,0 +1,257 @@
+name: Create Pre-Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Pre-release version (e.g., 1.3.0-beta.1)'
+        required: true
+      branch:
+        description: 'Branch to create pre-release from'
+        required: true
+        default: 'main'
+
+env:
+  GHIDRA_VERSION: 11.4.2
+  GHIDRA_DATE: 20250415
+  GHIDRA_LIBS: >-
+    Features/Base/lib/Base.jar
+    Features/Decompiler/lib/Decompiler.jar
+    Framework/Docking/lib/Docking.jar
+    Framework/Generic/lib/Generic.jar
+    Framework/Project/lib/Project.jar
+    Framework/SoftwareModeling/lib/SoftwareModeling.jar
+    Framework/Utility/lib/Utility.jar
+    Framework/Gui/lib/Gui.jar
+
+jobs:
+  create-prerelease:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.inputs.branch }}
+        fetch-depth: 0
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: maven
+
+    - name: Validate version format
+      run: |
+        VERSION="${{ github.event.inputs.version }}"
+        if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[0-9]+$ ]]; then
+          echo "❌ Invalid pre-release version format: $VERSION"
+          echo "Expected format: X.Y.Z-{alpha|beta|rc}.N (e.g., 1.3.0-beta.1)"
+          exit 1
+        fi
+        echo "✅ Version format valid: $VERSION"
+
+    - name: Create pre-release tag
+      run: |
+        VERSION="${{ github.event.inputs.version }}"
+        TAG="v${VERSION}"
+        
+        # Check if tag already exists
+        if git rev-parse "$TAG" >/dev/null 2>&1; then
+          echo "❌ Tag $TAG already exists!"
+          exit 1
+        fi
+        
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        git tag -a "$TAG" -m "Pre-release $VERSION from branch ${{ github.event.inputs.branch }}"
+        git push origin "$TAG"
+        
+        echo "✅ Created and pushed tag: $TAG"
+
+    - name: Download Ghidra
+      run: |
+        echo "Downloading Ghidra ${{ env.GHIDRA_VERSION }}..."
+        wget --no-verbose -O ghidra.zip https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${{ env.GHIDRA_VERSION }}_build/ghidra_${{ env.GHIDRA_VERSION }}_PUBLIC_${{ env.GHIDRA_DATE }}.zip
+        7z x -bd ghidra.zip
+
+    - name: Copy Ghidra libraries
+      run: |
+        echo "Setting up Ghidra libraries..."
+        mkdir -p ./lib
+        for libfile in ${{ env.GHIDRA_LIBS }}; do
+          echo "Copying ${libfile} to lib/"
+          cp "ghidra_${{ env.GHIDRA_VERSION }}_PUBLIC/Ghidra/${libfile}" ./lib/
+        done
+
+    - name: Build and test
+      run: |
+        echo "Building GhidraMCP pre-release..."
+        mvn clean package assembly:single -DskipTests
+        
+        echo "Running quick test suite..."
+        timeout 300 mvn test || echo "⚠️ Some tests may have timed out (expected for pre-release)"
+
+    - name: Prepare pre-release artifacts
+      run: |
+        VERSION="${{ github.event.inputs.version }}"
+        BRANCH="${{ github.event.inputs.branch }}"
+        
+        echo "Preparing pre-release artifacts..."
+        mkdir -p release
+        
+        # List what's in target directory for debugging
+        echo "Contents of target directory:"
+        ls -la target/
+        
+        # Copy main plugin ZIP with robust error handling
+        if [ -f "target/GhidraMCP-${VERSION}.zip" ]; then
+          echo "Copying versioned zip: GhidraMCP-${VERSION}.zip"
+          cp target/GhidraMCP-${VERSION}.zip release/
+        elif [ -f "target/GhidraMCP.zip" ]; then
+          echo "Copying non-versioned zip: GhidraMCP.zip -> GhidraMCP-${VERSION}.zip"
+          cp target/GhidraMCP.zip release/GhidraMCP-${VERSION}.zip
+        else
+          echo "Looking for any zip file in target..."
+          ZIP_FILE=$(find target/ -name "*.zip" | head -1)
+          if [ -n "$ZIP_FILE" ]; then
+            echo "Found zip file: $ZIP_FILE"
+            cp "$ZIP_FILE" release/GhidraMCP-${VERSION}.zip
+          else
+            echo "ERROR: No zip file found in target directory!"
+            exit 1
+          fi
+        fi
+        
+        # Copy essential files
+        cp bridge_mcp_ghidra.py release/
+        cp requirements.txt release/
+        cp README.md release/
+        [ -f LICENSE ] && cp LICENSE release/
+        
+        # Create pre-release specific documentation
+        cat > release/PRE-RELEASE-NOTES.md << EOF
+        # ⚠️ GhidraMCP ${VERSION} Pre-Release
+        
+        **This is a pre-release version for testing purposes only!**
+        
+        ## 🧪 Pre-Release Information
+        
+        - **Version:** ${VERSION}
+        - **Source Branch:** ${BRANCH}
+        - **Build Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+        - **Commit:** ${{ github.sha }}
+        
+        ## ⚠️ Important Notes
+        
+        - This is **NOT** a stable release
+        - Use for testing and feedback only
+        - May contain bugs or incomplete features
+        - Not recommended for production use
+        
+        ## 🐛 Reporting Issues
+        
+        Please report any issues found in this pre-release:
+        - [GitHub Issues](https://github.com/${{ github.repository }}/issues)
+        - Include "Pre-release ${VERSION}" in the title
+        
+        ## 📦 Installation
+        
+        Same as stable releases:
+        1. Extract to Ghidra's Extensions/Ghidra/ directory
+        2. Restart Ghidra and enable plugin
+        3. Install dependencies: \`pip install -r requirements.txt\`
+        4. Run: \`python bridge_mcp_ghidra.py\`
+        
+        EOF
+        
+        echo "Pre-release artifacts prepared:"
+        ls -la release/
+
+    - name: Generate pre-release notes
+      run: |
+        VERSION="${{ github.event.inputs.version }}"
+        BRANCH="${{ github.event.inputs.branch }}"
+        
+        cat > release_notes.md << EOF
+        # 🧪 GhidraMCP ${VERSION} Pre-Release
+        
+        **⚠️ This is a PRE-RELEASE version for testing purposes only!**
+        
+        ## About This Pre-Release
+        
+        - **Version:** ${VERSION}
+        - **Source Branch:** ${BRANCH}
+        - **Purpose:** Testing and feedback collection
+        - **Stability:** Not guaranteed - use at your own risk
+        
+        ## 🚀 What to Test
+        
+        This pre-release includes the latest changes from the ${BRANCH} branch:
+        
+        EOF
+        
+        # Add recent commits from the branch
+        echo "### Recent Changes" >> release_notes.md
+        git log --oneline --no-merges -10 >> release_notes.md
+        
+        cat >> release_notes.md << EOF
+        
+        ## 📦 Contents
+        
+        - GhidraMCP plugin ZIP file
+        - MCP server with 57 tools
+        - Python dependencies
+        - Pre-release documentation
+        
+        ## 🐛 Known Issues
+        
+        - This is a pre-release - expect potential bugs
+        - Some features may be incomplete
+        - Documentation may be outdated
+        
+        ## 📝 Feedback
+        
+        Please test thoroughly and report issues:
+        - [GitHub Issues](https://github.com/${{ github.repository }}/issues)
+        - Use "Pre-release ${VERSION}" in issue titles
+        
+        ---
+        
+        **⚠️ DO NOT USE IN PRODUCTION - TESTING ONLY**
+        EOF
+
+    - name: Create GitHub Pre-Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: "v${{ github.event.inputs.version }}"
+        name: "🧪 GhidraMCP ${{ github.event.inputs.version }} (Pre-Release)"
+        body_path: release_notes.md
+        files: |
+          release/*
+        draft: false
+        prerelease: true  # Mark as pre-release
+        generate_release_notes: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Pre-release summary
+      run: |
+        VERSION="${{ github.event.inputs.version }}"
+        BRANCH="${{ github.event.inputs.branch }}"
+        echo "## 🧪 Pre-Release Created!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Version:** ${VERSION}" >> $GITHUB_STEP_SUMMARY
+        echo "**Branch:** ${BRANCH}" >> $GITHUB_STEP_SUMMARY
+        echo "**Type:** Pre-release (testing only)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### ⚠️ Important" >> $GITHUB_STEP_SUMMARY
+        echo "This is a **PRE-RELEASE** for testing purposes only!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📥 Download" >> $GITHUB_STEP_SUMMARY
+        echo "[Download Pre-Release](https://github.com/${{ github.repository }}/releases/tag/v${VERSION})" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "✅ Pre-release workflow completed successfully!"

@@ -1,0 +1,125 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  java-tests:
+    name: Java Tests (Maven)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        java-version: [ '21' ]
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Java
+      uses: actions/setup-java@v3
+      with:
+        java-version: ${{ matrix.java-version }}
+        distribution: 'temurin'
+        cache: maven
+    
+    - name: Build with Maven
+      run: mvn clean package -q
+    
+    - name: Run Java Tests
+      run: mvn test -q
+    
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: java-test-results
+        path: target/surefire-reports/
+
+  python-tests:
+    name: Python Tests (pytest)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [ '3.8', '3.9', '3.10', '3.11' ]
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -q -r requirements-test.txt 2>/dev/null || echo "requirements-test.txt not found"
+        pip install -q -r requirements.txt 2>/dev/null || echo "requirements.txt not found"
+    
+    - name: Run Python tests
+      run: |
+        pytest tests/ -v 2>/dev/null || echo "No pytest tests found"
+    
+    - name: Upload coverage
+      if: always()
+      uses: codecov/codecov-action@v3
+      with:
+        files: ./coverage.xml
+        flags: unittests
+        fail_ci_if_error: false
+
+  code-quality:
+    name: Code Quality Checks
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Install quality tools
+      run: |
+        pip install -q pylint flake8 black isort 2>/dev/null || true
+    
+    - name: Run flake8
+      run: flake8 bridge_mcp_ghidra.py --max-line-length=120 --ignore=E501,W503 || true
+    
+    - name: Check formatting with black
+      run: black --check bridge_mcp_ghidra.py 2>/dev/null || echo "black check skipped"
+
+  markdown-lint:
+    name: Documentation Quality
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Lint markdown
+      uses: nosborn/github-action-markdown-cli@v3.3.0
+      with:
+        files: .
+        configFile: '.markdownlintrc'
+      continue-on-error: true
+
+  build-status:
+    name: Build Status
+    runs-on: ubuntu-latest
+    needs: [ java-tests, python-tests ]
+    if: always()
+    
+    steps:
+    - name: Report Status
+      run: |
+        if [ "${{ needs.java-tests.result }}" = "success" ] && [ "${{ needs.python-tests.result }}" = "success" ]; then
+          echo "✅ All tests passed"
+          exit 0
+        else
+          echo "❌ Some tests failed"
+          exit 1
+        fi

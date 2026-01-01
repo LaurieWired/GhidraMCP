@@ -1,54 +1,451 @@
-# Maven target directory
+# =============================================================================
+# PRODUCTION BUILD ARTIFACTS
+# =============================================================================
+
+# Maven target directory and build artifacts
 /target/
+*.jar
+*.zip
+*.war
+*.ear
+*.nar
 
 # Compiled class files
 *.class
 
-# Logs
-*.log
+# Build directories
+/build/
+/out/
+/dist/
 
-# IDE files
-# IntelliJ
+# =============================================================================
+# PYTHON ENVIRONMENT AND CACHE
+# =============================================================================
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.env/
+
+# Python distribution / packaging
+.Python
+build/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# =============================================================================
+# TESTING AND DEVELOPMENT
+# =============================================================================
+
+# Test artifacts
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+.benchmarks/
+htmlcov/
+.nyc_output
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# Test reports and logs
+test-results/
+test-reports/
+*.xml
+*.html
+
+# =============================================================================
+# LOGS AND RUNTIME FILES
+# =============================================================================
+
+# Application logs
+*.log
+logs/*.log
+logs/*.json
+logs/production_deploy_*.log
+logs/advanced_dev_cycle_*.log
+logs/comprehensive_mcp_test_*.json
+logs/documentation_evaluation_*.json
+
+# Keep log directory structure but ignore contents
+logs/*
+!logs/.gitkeep
+!logs/README.md
+
+# Runtime and temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.DS_Store
+._.DS_Store
+.Trashes
+.fuse_hidden*
+
+# =============================================================================
+# IDE AND EDITOR FILES
+# =============================================================================
+
+# IntelliJ IDEA
 .idea/
 *.iml
 *.iws
+*.ipr
 out/
 
 # Eclipse
 .project
 .classpath
 .settings/
+.metadata/
 bin/
+tmp/
 
 # VS Code
 .vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# NetBeans
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+# Sublime Text
+*.tmlanguage.cache
+*.tmPreferences.cache
+*.stTheme.cache
+*.sublime-workspace
+*.sublime-project
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# =============================================================================
+# SYSTEM FILES
+# =============================================================================
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
 
 # macOS
 .DS_Store
 .AppleDouble
 .LSOverride
-
-# Thumbnails
+Icon
 ._*
-
-# macOS metadata files
 .Spotlight-V100
 .Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.fseventsd
+.TemporaryItems
+.apdisk
 
-# Maven Wrapper
-.mvn/
-!/.mvn/wrapper/maven-wrapper.jar
-mvnw
-mvnw.cmd
+# Linux
+*~
+.directory
+.fuse_hidden*
+.nfs*
+
+# =============================================================================
+# ENVIRONMENT AND CONFIGURATION
+# =============================================================================
 
 # Environment files
 .env
 .env.*
+!.env.template
+.envrc
 
-# Java crash logs (if any)
+# Configuration overrides
+config/local.properties
+application-local.yml
+application-local.yaml
+
+# =============================================================================
+# SECURITY AND SENSITIVE DATA
+# =============================================================================
+
+# Keys and certificates
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+secrets/
+private/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# =============================================================================
+# MAVEN AND JAVA
+# =============================================================================
+
+# Maven Wrapper
+.mvn/
+!/.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+mvnw
+mvnw.cmd
+
+# Java crash logs
 hs_err_pid*
 replay_pid*
+
+# =============================================================================
+# GHIDRA SPECIFIC
+# =============================================================================
+
+# Ghidra project files
+*.gpr
+*.rep/
+*.lock
+
+# Ghidra analysis files
+*.gzf
+
+# =============================================================================
+# DEPLOYMENT AND PRODUCTION
+# =============================================================================
+
+# Deployment artifacts
+deploy/
+release/
+staging/
+
+# Docker
+.dockerignore
+Dockerfile.local
+docker-compose.override.yml
+
+# Kubernetes
+*.local.yaml
+*.local.yml
+
+# Cloud provider configs
+.aws/
+.azure/
+.gcp/
+
+# =============================================================================
+# DOCUMENTATION GENERATION
+# =============================================================================
+
+# Generated documentation
+docs/_build/
+docs/build/
+site/
+.mkdocs/
+
+# =============================================================================
+# NODE.JS (if used for tooling)
+# =============================================================================
+
+# Dependency directories
+node_modules/
+jspm_packages/
+
+# npm
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+
+# nyc test coverage
+.nyc_output
+
+# =============================================================================
+# PROJECT SPECIFIC EXCLUSIONS
+# =============================================================================
 
 # Third party JAR files from Ghidra
 lib/*.jar
 
+# Temporary development files
+*.backup
+*.bak
+*.orig
+*.rej
+.merge_file_*
+*.txt
+
+# Archive files
+*.7z
+*.dmg
+*.gz
+*.iso
+*.rar
+*.tar
+*.zip
+
+# Runtime configuration
+.claude/
+.benchmarks/
+
+# Migration and temporary scripts
+migrate_*.py.bak
+*_backup.*
+temp_*
+
+# Test outputs and reports
+test_output/
+test-output/
+allure-results/
+allure-report/
+junit/
+reports/
+
+# Performance and profiling
+*.prof
+*.trace
+*.mem
+
+# =============================================================================
+# FINAL CATCH-ALL PATTERNS
+# =============================================================================
+
+# Any directory named 'build' at any level
+**/build/
+
+# Any directory named 'dist' at any level  
+**/dist/
+
+# Any directory named 'target' at any level
+**/target/
+
+# Temporary directories
+tmp/
+temp/
+.tmp/
+.temp/
+
+# =============================================================================
+# ORDINAL FIX LOGS (Temporary - not part of repo)
+# =============================================================================
+
+# Ordinal fix log files (historical logs from automated fixing)
+ordinal_fix_log*.txt
+ordinal_fix_log.txt
+
+
+# =============================================================================
+# FUNCTION HASH INDEX AND PROGRESS TRACKING
+# =============================================================================
+
+# Function hash index (user-specific, regenerated per binary)
+function_hash_index.json
+
+# Completeness tracking state (local analysis state)
+completeness-tracking.json
+
+# Worker progress files (parallel processing state)
+functions-progress-worker*.json
+
+# =============================================================================
+# WORKFLOW LOCAL STATE FILES
+# =============================================================================
+
+# Ghidra manager config (contains local paths)
+workflows/.ghidra_manager_config.json
+
+# Improvement loop state (session-specific)
+workflows/.improvement_state.json
+workflows/.self_improvement_state.json
+
+# Session and quality history
+workflows/.session_history.json
+workflows/.quality_history.json
+
+# Workflow logs and reports
+workflows/logs/
+workflows/reports/
+
+# =============================================================================
+# TEST OUTPUT DIRECTORIES
+# =============================================================================
+
+# Quality reports from automated testing
+quality-reports/
+
+# Model comparison test output
+model-comparison-output/
+
+# Global data analysis reports (regenerated)
+global_data_analysis_report.md
+
+# Windows NUL file artifacts
+nul
