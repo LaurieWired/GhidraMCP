@@ -1,16 +1,18 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
-#     "requests>=2,<3",
+#     "httpx>=0.27.0",
+#     "tenacity>=8.2.0",
 #     "mcp>=1.2.0,<2",
 # ]
 # ///
 
 import sys
-import requests
+import httpx
 import argparse
 import logging
 from urllib.parse import urljoin
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from mcp.server.fastmcp import FastMCP
 
@@ -23,7 +25,28 @@ mcp = FastMCP("ghidra-mcp")
 # Initialize ghidra_server_url with default value
 ghidra_server_url = DEFAULT_GHIDRA_SERVER
 
-def safe_get(endpoint: str, params: dict = None) -> list:
+# HTTP client with connection pooling
+_http_client = None
+
+# Configurable timeouts (in seconds)
+TIMEOUT_DECOMPILE_MAX = 1800  # Maximum decompilation timeout (30 minutes)
+
+def get_http_client():
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.Client(
+            timeout=30.0,
+            limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
+        )
+    return _http_client
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception_type((httpx.ConnectError, httpx.ConnectTimeout)),
+    reraise=True,
+)
+def safe_get(endpoint: str, params: dict = None, timeout: float = 30.0) -> list:
     """
     Perform a GET request with optional query parameters.
     """
@@ -33,24 +56,30 @@ def safe_get(endpoint: str, params: dict = None) -> list:
     url = urljoin(ghidra_server_url, endpoint)
 
     try:
-        response = requests.get(url, params=params, timeout=5)
+        response = get_http_client().get(url, params=params, timeout=timeout)
         response.encoding = 'utf-8'
-        if response.ok:
+        if response.status_code == 200:
             return response.text.splitlines()
         else:
             return [f"Error {response.status_code}: {response.text.strip()}"]
     except Exception as e:
         return [f"Request failed: {str(e)}"]
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception_type((httpx.ConnectError, httpx.ConnectTimeout)),
+    reraise=True,
+)
 def safe_post(endpoint: str, data: dict | str) -> str:
     try:
         url = urljoin(ghidra_server_url, endpoint)
         if isinstance(data, dict):
-            response = requests.post(url, data=data, timeout=5)
+            response = get_http_client().post(url, data=data)
         else:
-            response = requests.post(url, data=data.encode("utf-8"), timeout=5)
+            response = get_http_client().post(url, content=data.encode("utf-8"))
         response.encoding = 'utf-8'
-        if response.ok:
+        if response.status_code == 200:
             return response.text.strip()
         else:
             return f"Error {response.status_code}: {response.text.strip()}"
@@ -176,11 +205,70 @@ def list_functions() -> list:
     return safe_get("list_functions")
 
 @mcp.tool()
-def decompile_function_by_address(address: str) -> str:
+def decompile_function_by_address(address: str, timeout: int = 120) -> str:
     """
     Decompile a function at the given address.
+    
+    Args:
+        address: Function address in hex format (e.g. "0x1400010a0")
+        timeout: Decompilation timeout in seconds (default: 120, max: 600).
+                 Increase for large/complex functions.
     """
-    return "\n".join(safe_get("decompile_function", {"address": address}))
+    # Clamp timeout to valid range
+    timeout = max(10, min(timeout, TIMEOUT_DECOMPILE_MAX))
+    return "\n".join(safe_get("decompile_function", {"address": address}, timeout=float(timeout)))
+
+@mcp.tool()
+def decompile_function_async(address: str, timeout: int = 300) -> dict:
+    """
+    Start async decompilation of a function. Returns immediately with a task_id.
+    Use get_task_status() to poll for completion, then get_task_result() to get output.
+    
+    Args:
+        address: Function address in hex format (e.g. "0x1400010a0")
+        timeout: Decompilation timeout in seconds (default: 300, max: 600)
+    
+    Returns:
+        Dict with task_id and initial status
+    """
+    import json
+    timeout = max(10, min(timeout, TIMEOUT_DECOMPILE_MAX))
+    result = safe_get("decompile_async", {"address": address, "timeout": timeout}, timeout=10.0)
+    try:
+        return json.loads("\n".join(result))
+    except:
+        return {"error": "\n".join(result)}
+
+@mcp.tool()
+def get_task_status(task_id: str) -> dict:
+    """
+    Check the status of an async decompilation task.
+    
+    Args:
+        task_id: Task ID from decompile_function_async()
+    
+    Returns:
+        Dict with status, progress, elapsed_ms, and error (if failed)
+    """
+    import json
+    result = safe_get("task_status", {"task_id": task_id}, timeout=5.0)
+    try:
+        return json.loads("\n".join(result))
+    except:
+        return {"error": "\n".join(result)}
+
+@mcp.tool()
+def get_task_result(task_id: str) -> str:
+    """
+    Get the result of a completed async decompilation task.
+    
+    Args:
+        task_id: Task ID from decompile_function_async()
+    
+    Returns:
+        Decompiled C code or error message
+    """
+    return "\n".join(safe_get("task_result", {"task_id": task_id}, timeout=10.0))
 
 @mcp.tool()
 def disassemble_function(address: str) -> list:

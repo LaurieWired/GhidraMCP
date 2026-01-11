@@ -56,6 +56,7 @@ import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @PluginInfo(
@@ -71,6 +72,49 @@ public class GhidraMCPPlugin extends Plugin {
     private static final String OPTION_CATEGORY_NAME = "GhidraMCP HTTP Server";
     private static final String PORT_OPTION_NAME = "Server Port";
     private static final int DEFAULT_PORT = 8080;
+    
+    // Async task management
+    private final ConcurrentHashMap<String, AsyncTask> asyncTasks = new ConcurrentHashMap<>();
+    private final ExecutorService asyncExecutor = Executors.newCachedThreadPool();
+    
+    private static class AsyncTask {
+        final String taskId;
+        final long startTime;
+        volatile String status;  // "pending", "running", "completed", "failed"
+        volatile String result;
+        volatile String error;
+        
+        AsyncTask(String taskId) {
+            this.taskId = taskId;
+            this.startTime = System.currentTimeMillis();
+            this.status = "pending";
+        }
+        
+        long getElapsedMs() {
+            return System.currentTimeMillis() - startTime;
+        }
+        
+        String toJson() {
+            StringBuilder json = new StringBuilder();
+            json.append("{");
+            json.append("\"task_id\":\"").append(taskId).append("\",");
+            json.append("\"status\":\"").append(status).append("\",");
+            json.append("\"elapsed_ms\":").append(getElapsedMs());
+            if (error != null) {
+                json.append(",\"error\":\"").append(escapeJson(error)).append("\"");
+            }
+            json.append("}");
+            return json.toString();
+        }
+        
+        private static String escapeJson(String s) {
+            if (s == null) return "";
+            return s.replace("\\", "\\\\")
+                    .replace("\"", "\\\"")
+                    .replace("\n", "\\n")
+                    .replace("\r", "\\r");
+        }
+    }
 
     public GhidraMCPPlugin(PluginTool tool) {
         super(tool);
@@ -215,6 +259,72 @@ public class GhidraMCPPlugin extends Plugin {
             Map<String, String> qparams = parseQueryParams(exchange);
             String address = qparams.get("address");
             sendResponse(exchange, decompileFunctionByAddress(address));
+        });
+
+        // Async decompilation endpoints
+        server.createContext("/decompile_async", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            if (address == null || address.isEmpty()) {
+                sendJsonResponse(exchange, 400, "{\"error\":\"Address is required\"}");
+                return;
+            }
+            String taskId = UUID.randomUUID().toString();
+            AsyncTask task = new AsyncTask(taskId);
+            asyncTasks.put(taskId, task);
+            asyncExecutor.submit(() -> {
+                task.status = "running";
+                try {
+                    String result = decompileFunctionByAddress(address);
+                    if (result.startsWith("No program") || result.startsWith("Error") || 
+                        result.startsWith("Could not find") || result.startsWith("Decompilation")) {
+                        task.status = "failed";
+                        task.error = result;
+                    } else {
+                        task.status = "completed";
+                        task.result = result;
+                    }
+                } catch (Exception e) {
+                    task.status = "failed";
+                    task.error = e.getMessage();
+                }
+            });
+            sendJsonResponse(exchange, 202, "{\"task_id\":\"" + taskId + "\",\"status\":\"pending\"}");
+        });
+
+        server.createContext("/task_status", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String taskId = qparams.get("task_id");
+            if (taskId == null || taskId.isEmpty()) {
+                sendJsonResponse(exchange, 400, "{\"error\":\"task_id is required\"}");
+                return;
+            }
+            AsyncTask task = asyncTasks.get(taskId);
+            if (task == null) {
+                sendJsonResponse(exchange, 404, "{\"error\":\"Task not found\"}");
+                return;
+            }
+            sendJsonResponse(exchange, 200, task.toJson());
+        });
+
+        server.createContext("/task_result", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String taskId = qparams.get("task_id");
+            if (taskId == null || taskId.isEmpty()) {
+                sendJsonResponse(exchange, 400, "{\"error\":\"task_id is required\"}");
+                return;
+            }
+            AsyncTask task = asyncTasks.get(taskId);
+            if (task == null) {
+                sendJsonResponse(exchange, 404, "{\"error\":\"Task not found\"}");
+                return;
+            }
+            if (!"completed".equals(task.status)) {
+                sendJsonResponse(exchange, 400, "{\"error\":\"Task not complete\",\"status\":\"" + task.status + "\"}");
+                return;
+            }
+            sendResponse(exchange, task.result);
+            asyncTasks.remove(taskId);
         });
 
         server.createContext("/disassemble_function", exchange -> {
@@ -1633,6 +1743,15 @@ public class GhidraMCPPlugin extends Plugin {
         byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
         exchange.sendResponseHeaders(200, bytes.length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(bytes);
+        }
+    }
+    
+    private void sendJsonResponse(HttpExchange exchange, int code, String json) throws IOException {
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+        exchange.sendResponseHeaders(code, bytes.length);
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);
         }
