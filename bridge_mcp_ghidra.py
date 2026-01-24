@@ -192,16 +192,59 @@ def disassemble_function(address: str) -> list:
 @mcp.tool()
 def set_decompiler_comment(address: str, comment: str) -> str:
     """
-    Set a comment for a given address in the function pseudocode.
+    Set a comment for a specific address in the decompiler (pseudocode) view.
+
+    Use this for adding high-level code explanations, algorithm descriptions, or
+    logic flow notes that help understand the decompiled code. Comments appear as
+    pre-comments in the pseudocode display.
+
+    Common use cases:
+    - Explain complex logic or algorithm patterns
+    - Document variable usage or data flow
+    - Add context about code purpose or behavior
+    - Note suspicious or interesting code patterns
+
+    To remove an existing comment, pass an empty string ("") as the comment.
     """
     return safe_post("set_decompiler_comment", {"address": address, "comment": comment})
 
 @mcp.tool()
 def set_disassembly_comment(address: str, comment: str) -> str:
     """
-    Set a comment for a given address in the function disassembly.
+    Set a comment for a specific address in the disassembly (listing) view.
+
+    Use this for adding line-specific notes about assembly instructions. Comments
+    appear at the end of the line (EOL) in the disassembly listing.
+
+    Common use cases:
+    - Explain individual instruction behavior
+    - Note register values or memory accesses
+    - Document low-level implementation details
+    - Mark interesting assembly patterns
+
+    To remove an existing comment, pass an empty string ("") as the comment.
     """
     return safe_post("set_disassembly_comment", {"address": address, "comment": comment})
+
+@mcp.tool()
+def set_plate_comment(address: str, comment: str) -> str:
+    """
+    Set a plate comment for a specific address. Plate comments are displayed
+    prominently at the top of the Listing view, making them ideal for important
+    high-level notes.
+
+    Use plate comments for:
+    - Function summaries or overviews
+    - Important warnings or security notes
+    - High-level behavioral descriptions
+    - Cross-references to related functions
+
+    Plate comments are the most visible comment type in Ghidra and are perfect
+    for information that should be immediately visible when navigating to an address.
+
+    To remove an existing plate comment, pass an empty string ("") as the comment.
+    """
+    return safe_post("set_plate_comment", {"address": address, "comment": comment})
 
 @mcp.tool()
 def rename_function_by_address(function_address: str, new_name: str) -> str:

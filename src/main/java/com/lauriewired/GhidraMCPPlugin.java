@@ -239,6 +239,14 @@ public class GhidraMCPPlugin extends Plugin {
             sendResponse(exchange, success ? "Comment set successfully" : "Failed to set comment");
         });
 
+        server.createContext("/set_plate_comment", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String address = params.get("address");
+            String comment = params.get("comment");
+            boolean success = setPlateComment(address, comment);
+            sendResponse(exchange, success ? "Plate comment set successfully" : "Failed to set plate comment");
+        });
+
         server.createContext("/rename_function_by_address", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             String functionAddress = params.get("function_address");
@@ -861,7 +869,12 @@ public class GhidraMCPPlugin extends Plugin {
     private boolean setCommentAtAddress(String addressStr, String comment, int commentType, String transactionName) {
         Program program = getCurrentProgram();
         if (program == null) return false;
-        if (addressStr == null || addressStr.isEmpty() || comment == null) return false;
+        if (addressStr == null || addressStr.isEmpty()) return false;
+        if (comment == null) return false;
+
+        // 将空字符串转换为 null,以便在 Ghidra 中正确删除注释
+        // "" -> null 会删除注释,而 "" -> "" 只会设置一个空注释
+        String commentValue = comment.isEmpty() ? null : comment;
 
         AtomicBoolean success = new AtomicBoolean(false);
 
@@ -870,7 +883,7 @@ public class GhidraMCPPlugin extends Plugin {
                 int tx = program.startTransaction(transactionName);
                 try {
                     Address addr = program.getAddressFactory().getAddress(addressStr);
-                    program.getListing().setComment(addr, commentType, comment);
+                    program.getListing().setComment(addr, commentType, commentValue);
                     success.set(true);
                 } catch (Exception e) {
                     Msg.error(this, "Error setting " + transactionName.toLowerCase(), e);
@@ -897,6 +910,13 @@ public class GhidraMCPPlugin extends Plugin {
      */
     private boolean setDisassemblyComment(String addressStr, String comment) {
         return setCommentAtAddress(addressStr, comment, CodeUnit.EOL_COMMENT, "Set disassembly comment");
+    }
+
+    /**
+     * Set a plate comment for a given address
+     */
+    private boolean setPlateComment(String addressStr, String comment) {
+        return setCommentAtAddress(addressStr, comment, CodeUnit.PLATE_COMMENT, "Set plate comment");
     }
 
     /**
@@ -1564,16 +1584,14 @@ public class GhidraMCPPlugin extends Plugin {
         String bodyStr = new String(body, StandardCharsets.UTF_8);
         Map<String, String> params = new HashMap<>();
         for (String pair : bodyStr.split("&")) {
-            String[] kv = pair.split("=");
-            if (kv.length == 2) {
-                // URL decode parameter values
-                try {
-                    String key = URLDecoder.decode(kv[0], StandardCharsets.UTF_8);
-                    String value = URLDecoder.decode(kv[1], StandardCharsets.UTF_8);
-                    params.put(key, value);
-                } catch (Exception e) {
-                    Msg.error(this, "Error decoding URL parameter", e);
-                }
+            String[] kv = pair.split("=", 2); // 限制分割为2个部分,允许值中包含"="
+            // URL decode parameter values
+            try {
+                String key = URLDecoder.decode(kv[0], StandardCharsets.UTF_8);
+                String value = kv.length > 1 ? URLDecoder.decode(kv[1], StandardCharsets.UTF_8) : "";
+                params.put(key, value);
+            } catch (Exception e) {
+                Msg.error(this, "Error decoding URL parameter", e);
             }
         }
         return params;
