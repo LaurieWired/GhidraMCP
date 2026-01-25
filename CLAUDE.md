@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Always respond to the user in Chinese**, but code should be in English, except comments. Comments should also be in Chinese.
 
+## Git Commit Preferences
+
+**Do NOT add Co-Authored-By tags** (e.g., `Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>`) to commit messages. Keep commit messages clean without AI attribution tags.
+
 ## Project Overview
 
 GhidraMCP is a Model Context Protocol (MCP) server that enables LLMs (like Claude) to autonomously reverse engineer applications using Ghidra's functionality. The project consists of two main components:
@@ -52,6 +56,71 @@ mvn clean package assembly:single
 - Builds on push to main branch or PRs
 
 ## Testing
+
+### Debugging Ghidra Plugin Output
+
+**IMPORTANT**: When debugging plugin issues, there are **two places** to check for output:
+
+#### 1. Ghidra Console Window (Real-time)
+- **Location**: `Window` → `Console` (title: "Console - Scripting")
+- **What shows here**: Plugin output via `ConsoleService`
+- **How to use**:
+  - Use `printToConsole(message)` method in plugin code
+  - Requires Ghidra to be running with GUI
+  - Real-time output for debugging
+
+#### 2. Application Log File (Persistent)
+- **Location (macOS)**: `~/Library/ghidra/ghidra_12.0.1_PUBLIC/application.log`
+- **Location (Linux)**: `~/.ghidra/application.log`
+- **Location (Windows)**: `C:\Users\<username>\.ghidra\application.log`
+- **What shows here**: All `Msg.info()`, `Msg.error()`, and exception stack traces
+- **How to view**:
+  ```bash
+  # View latest logs
+  tail -100 ~/Library/ghidra/ghidra_12.0.1_PUBLIC/application.log
+
+  # Filter for specific plugin output
+  grep "GhidraMCP" ~/Library/ghidra/ghidra_12.0.1_PUBLIC/application.log
+
+  # View error messages only
+  grep "ERROR.*GhidraMCP" ~/Library/ghidra/ghidra_12.0.1_PUBLIC/application.log
+  ```
+
+#### 3. Plugin Console Output Implementation
+
+The plugin uses **ConsoleService** for reliable Console output:
+
+```java
+// In GhidraMCPPlugin class
+private ConsoleService consoleService;
+
+// Constructor: Get the service
+public GhidraMCPPlugin(PluginTool tool) {
+    super(tool);
+    this.consoleService = tool.getService(ConsoleService.class);
+}
+
+// Helper method: Output to Console
+private void printToConsole(String message) {
+    if (consoleService != null) {
+        consoleService.addMessage("GhidraMCP", message);  // (source, message)
+    }
+    Msg.info(this, message);  // Also log to file
+}
+```
+
+**Why `System.out.println()` doesn't work**:
+- Ghidra redirects standard output
+- ConsoleService is the correct way to output to Ghidra's Console window
+- `Msg.info()` only goes to log file, not GUI Console
+
+#### 4. Common Debugging Issues
+
+| Issue | Solution |
+|-------|----------|
+| No output in Console | Check if `consoleService` is null; verify Ghidra is running with GUI |
+| Output in log file but not Console | Use `printToConsole()` instead of `Msg.info()` |
+| "Paths must have non-empty elements" | Check if dataType path has double slashes (`//int`) |
 
 ### Running the MCP Bridge (for manual testing)
 ```bash

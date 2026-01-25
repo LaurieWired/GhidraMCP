@@ -53,5 +53,4 @@ replay_pid*
 lib/*.jar
 
 # Dev tools related
-.planning/
 __pycache__/

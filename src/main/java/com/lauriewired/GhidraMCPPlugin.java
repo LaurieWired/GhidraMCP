@@ -20,6 +20,7 @@ import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileResults;
 import ghidra.app.plugin.PluginCategoryNames;
 import ghidra.app.services.CodeViewerService;
+import ghidra.app.services.ConsoleService;
 import ghidra.app.services.ProgramManager;
 import ghidra.app.util.PseudoDisassembler;
 import ghidra.app.cmd.function.SetVariableNameCmd;
@@ -40,6 +41,12 @@ import ghidra.program.model.data.DataType;
 import ghidra.program.model.data.DataTypeManager;
 import ghidra.program.model.data.PointerDataType;
 import ghidra.program.model.data.Undefined1DataType;
+import ghidra.program.model.data.EnumDataType;
+import ghidra.program.model.data.CategoryPath;
+import ghidra.program.model.data.StructureDataType;
+import ghidra.program.model.data.UnionDataType;
+import ghidra.program.model.data.DataTypeComponent;
+import ghidra.program.model.data.TypedefDataType;
 import ghidra.program.model.listing.Variable;
 import ghidra.app.decompiler.component.DecompilerUtils;
 import ghidra.app.decompiler.ClangToken;
@@ -68,12 +75,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class GhidraMCPPlugin extends Plugin {
 
     private HttpServer server;
+    private ConsoleService consoleService;
     private static final String OPTION_CATEGORY_NAME = "GhidraMCP HTTP Server";
     private static final String PORT_OPTION_NAME = "Server Port";
-    private static final int DEFAULT_PORT = 8080;
+    private static final int DEFAULT_PORT = 28382;
 
     public GhidraMCPPlugin(PluginTool tool) {
         super(tool);
+
+        // 获取 ConsoleService 用于输出到 Console
+        this.consoleService = tool.getService(ConsoleService.class);
+
         Msg.info(this, "GhidraMCPPlugin loading...");
 
         // Register the configuration option
@@ -349,6 +361,207 @@ public class GhidraMCPPlugin extends Plugin {
             sendResponse(exchange, listDefinedStrings(offset, limit, filter));
         });
 
+        // 搜索数据类型 - 必须在 /data_types 和 /data_types/ 之前注册
+        server.createContext("/data_types/search", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String name = qparams.get("name");
+            if (name == null || name.isEmpty()) {
+                try {
+                    sendResponse(exchange, "Error: 'name' parameter is required", 400);
+                } catch (IOException e) {
+                    Msg.error(this, "Failed to send error response", e);
+                }
+                return;
+            }
+            boolean caseSensitive = Boolean.parseBoolean(qparams.getOrDefault("case_sensitive", "false"));
+            int offset = parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = parseIntOrDefault(qparams.get("limit"), 100);
+            sendResponse(exchange, searchDataTypes(name, caseSensitive, offset, limit));
+        });
+
+        // 获取特定数据类型的详情 - 必须在 /data_types 之前注册
+        server.createContext("/data_types/", exchange -> {
+            // 从路径中提取数据类型路径,例如 "/data_types/int" -> "int"
+            String path = exchange.getRequestURI().getPath();
+            String typePath = path.substring("/data_types/".length());
+            // URL 解码
+            try {
+                typePath = URLDecoder.decode(typePath, StandardCharsets.UTF_8);
+            } catch (Exception e) {
+                Msg.error(this, "Error decoding type path", e);
+            }
+            sendResponse(exchange, getDataTypeDetails(typePath));
+        });
+
+        // 创建结构体数据类型 - 必须在 /data_types 之前注册
+        server.createContext("/data_types/struct", exchange -> {
+            printToConsole("========== HTTP: /data_types/struct called ==========");
+
+            if (!"POST".equals(exchange.getRequestMethod())) {
+                printToConsole("Method not allowed: " + exchange.getRequestMethod());
+                try {
+                    sendResponse(exchange, "Method not allowed. Use POST.", 405);
+                } catch (IOException e) {
+                    Msg.error(this, "Failed to send error response", e);
+                }
+                return;
+            }
+
+            // 解析 JSON 请求体
+            String requestBody;
+            try {
+                byte[] body = exchange.getRequestBody().readAllBytes();
+                requestBody = new String(body, StandardCharsets.UTF_8);
+                printToConsole("Received body: " + requestBody);
+            } catch (IOException e) {
+                printErrorToConsole("Failed to read request body");
+                Msg.error(this, "Failed to read request body", e);
+                try {
+                    sendResponse(exchange, "Failed to read request body", 500);
+                } catch (IOException ex) {
+                    Msg.error(this, "Failed to send error response", ex);
+                }
+                return;
+            }
+
+            printToConsole("Calling createStructFromJson...");
+            String result = createStructFromJson(requestBody);
+            printToConsole("Result: " + result);
+
+            try {
+                if (result.startsWith("Error")) {
+                    sendResponse(exchange, result, 400);
+                } else {
+                    sendResponse(exchange, result);
+                }
+            } catch (IOException e) {
+                printErrorToConsole("Failed to send response: " + e.getMessage());
+                Msg.error(this, "Failed to send response", e);
+            }
+        });
+
+        // 列出所有数据类型 - 最后注册,作为默认端点
+        server.createContext("/data_types", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            int offset = parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = parseIntOrDefault(qparams.get("limit"), 100);
+            sendResponse(exchange, getAllDataTypePaths(offset, limit));
+        });
+
+        // 创建枚举数据类型 - 必须在 /data_types 之前注册
+        server.createContext("/data_types/enum", exchange -> {
+            if (!"POST".equals(exchange.getRequestMethod())) {
+                try {
+                    sendResponse(exchange, "Method not allowed. Use POST.", 405);
+                } catch (IOException e) {
+                    Msg.error(this, "Failed to send error response", e);
+                }
+                return;
+            }
+
+            // 解析 JSON 请求体
+            String requestBody;
+            try {
+                byte[] body = exchange.getRequestBody().readAllBytes();
+                requestBody = new String(body, StandardCharsets.UTF_8);
+            } catch (IOException e) {
+                Msg.error(this, "Failed to read request body", e);
+                try {
+                    sendResponse(exchange, "Failed to read request body", 500);
+                } catch (IOException ex) {
+                    Msg.error(this, "Failed to send error response", ex);
+                }
+                return;
+            }
+
+            String result = createEnumFromJson(requestBody);
+            try {
+                if (result.startsWith("Error")) {
+                    sendResponse(exchange, result, 400);
+                } else {
+                    sendResponse(exchange, result);
+                }
+            } catch (IOException e) {
+                Msg.error(this, "Failed to send response", e);
+            }
+        });
+
+        // 创建 Typedef 数据类型 - 必须在 /data_types 之前注册
+        server.createContext("/data_types/typedef", exchange -> {
+            if (!"POST".equals(exchange.getRequestMethod())) {
+                try {
+                    sendResponse(exchange, "Method not allowed. Use POST.", 405);
+                } catch (IOException e) {
+                    Msg.error(this, "Failed to send error response", e);
+                }
+                return;
+            }
+
+            // 解析 JSON 请求体
+            String requestBody;
+            try {
+                byte[] body = exchange.getRequestBody().readAllBytes();
+                requestBody = new String(body, StandardCharsets.UTF_8);
+            } catch (IOException e) {
+                Msg.error(this, "Failed to read request body", e);
+                try {
+                    sendResponse(exchange, "Failed to read request body", 500);
+                } catch (IOException ex) {
+                    Msg.error(this, "Failed to send error response", ex);
+                }
+                return;
+            }
+
+            String result = createTypedefFromJson(requestBody);
+            try {
+                if (result.startsWith("Error")) {
+                    sendResponse(exchange, result, 400);
+                } else {
+                    sendResponse(exchange, result);
+                }
+            } catch (IOException e) {
+                Msg.error(this, "Failed to send response", e);
+            }
+        });
+
+        // 创建联合体 (Union) 数据类型 - 必须在 /data_types 之前注册
+        server.createContext("/data_types/union", exchange -> {
+            if (!"POST".equals(exchange.getRequestMethod())) {
+                try {
+                    sendResponse(exchange, "Method not allowed. Use POST.", 405);
+                } catch (IOException e) {
+                    Msg.error(this, "Failed to send error response", e);
+                }
+                return;
+            }
+
+            // 解析 JSON 请求体
+            String requestBody;
+            try {
+                byte[] body = exchange.getRequestBody().readAllBytes();
+                requestBody = new String(body, StandardCharsets.UTF_8);
+            } catch (IOException e) {
+                Msg.error(this, "Failed to read request body", e);
+                try {
+                    sendResponse(exchange, "Failed to read request body", 500);
+                } catch (IOException ex) {
+                    Msg.error(this, "Failed to send error response", ex);
+                }
+                return;
+            }
+
+            String result = createUnionFromJson(requestBody);
+            try {
+                if (result.startsWith("Error")) {
+                    sendResponse(exchange, result, 400);
+                } else {
+                    sendResponse(exchange, result);
+                }
+            } catch (IOException e) {
+                Msg.error(this, "Failed to send response", e);
+            }
+        });
+
         server.setExecutor(null);
         new Thread(() -> {
             try {
@@ -391,6 +604,281 @@ public class GhidraMCPPlugin extends Plugin {
         List<String> sorted = new ArrayList<>(classNames);
         Collections.sort(sorted);
         return paginateList(sorted, offset, limit);
+    }
+
+    /**
+     * 获取所有数据类型的路径名
+     * @param offset 分页偏移量
+     * @param limit 返回的最大数量
+     * @return 分页后的数据类型路径列表,每行一个路径
+     */
+    private String getAllDataTypePaths(int offset, int limit) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        DataTypeManager dtm = program.getDataTypeManager();
+        if (dtm == null) return "No data type manager available";
+
+        List<String> dataTypePaths = new ArrayList<>();
+
+        // 获取所有数据类型的迭代器
+        Iterator<DataType> allDataTypes = dtm.getAllDataTypes();
+
+        // 收集所有数据类型的路径
+        while (allDataTypes.hasNext()) {
+            DataType dataType = allDataTypes.next();
+            String pathName = dataType.getPathName();
+            if (pathName != null && !pathName.isEmpty()) {
+                dataTypePaths.add(pathName);
+            }
+        }
+
+        // 排序以便于查看
+        Collections.sort(dataTypePaths);
+
+        // 应用分页
+        return paginateList(dataTypePaths, offset, limit);
+    }
+
+    /**
+     * 根据名称关键词搜索数据类型
+     *
+     * @param query 搜索关键词
+     * @param caseSensitive 是否大小写敏感
+     * @param offset 分页偏移
+     * @param limit 返回数量限制
+     * @return 匹配的数据类型路径列表,每行一个路径
+     */
+    private String searchDataTypes(String query, boolean caseSensitive, int offset, int limit) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        DataTypeManager dtm = program.getDataTypeManager();
+        if (dtm == null) return "No data type manager available";
+
+        List<String> matchingPaths = new ArrayList<>();
+
+        // 准备搜索字符串
+        String searchQuery = caseSensitive ? query : query.toLowerCase();
+
+        // 获取所有数据类型的迭代器
+        Iterator<DataType> allDataTypes = dtm.getAllDataTypes();
+
+        // 收集匹配的数据类型路径
+        while (allDataTypes.hasNext()) {
+            DataType dataType = allDataTypes.next();
+            String pathName = dataType.getPathName();
+
+            if (pathName == null || pathName.isEmpty()) {
+                continue;
+            }
+
+            // 根据大小写敏感设置进行匹配
+            String targetPath = caseSensitive ? pathName : pathName.toLowerCase();
+
+            // 检查路径是否包含搜索关键词
+            if (targetPath.contains(searchQuery)) {
+                matchingPaths.add(pathName);
+            }
+        }
+
+        // 排序以便于查看
+        Collections.sort(matchingPaths);
+
+        // 应用分页
+        return paginateList(matchingPaths, offset, limit);
+    }
+
+    /**
+     * 获取特定数据类型的详细信息 (JSON 格式)
+     * @param typePath 数据类型的完整路径,如 "int" 或 "/MyTypes/MyStruct"
+     * @return JSON 格式的数据类型详情
+     */
+    private String getDataTypeDetails(String typePath) {
+        Program program = getCurrentProgram();
+        if (program == null) {
+            return "{\"error\": \"No program loaded\"}";
+        }
+
+        DataTypeManager dtm = program.getDataTypeManager();
+        if (dtm == null) {
+            return "{\"error\": \"No data type manager available\"}";
+        }
+
+        if (typePath == null || typePath.isEmpty()) {
+            return "{\"error\": \"Type path is required\"}";
+        }
+
+        // 确保路径以 / 开头
+        if (!typePath.startsWith("/")) {
+            typePath = "/" + typePath;
+        }
+
+        try {
+            // 获取数据类型
+            DataType dataType = dtm.getDataType(typePath);
+            if (dataType == null) {
+                return "{\"error\": \"Data type not found: " + escapeJson(typePath) + "\"}";
+            }
+
+            // 构建 JSON
+            StringBuilder json = new StringBuilder();
+            json.append("{\n");
+
+            // 基本信息
+            json.append("  \"path\": ").append(jsonEscape(dataType.getPathName())).append(",\n");
+            json.append("  \"name\": ").append(jsonEscape(dataType.getName())).append(",\n");
+            json.append("  \"categoryPath\": ").append(jsonEscape(dataType.getCategoryPath().getPath())).append(",\n");
+            json.append("  \"length\": ").append(dataType.getLength()).append(",\n");
+
+            // 描述
+            String description = dataType.getDescription();
+            if (description != null && !description.isEmpty()) {
+                json.append("  \"description\": ").append(jsonEscape(description)).append(",\n");
+            } else {
+                json.append("  \"description\": \"\",\n");
+            }
+
+            json.append("  \"isDeleted\": ").append(dataType.isDeleted()).append(",\n");
+
+            // 数据类型类别
+            String typeCategory = getDataTypeCategory(dataType);
+            json.append("  \"type\": \"").append(typeCategory).append("\"");
+
+            // 对于复合类型,添加额外信息
+            if (dataType instanceof ghidra.program.model.data.Structure) {
+                json.append(",\n  \"fields\": [");
+                json.append(getStructureFields((ghidra.program.model.data.Structure) dataType));
+                json.append("\n  ]");
+            } else if (dataType instanceof ghidra.program.model.data.TypeDef) {
+                ghidra.program.model.data.TypeDef typedef = (ghidra.program.model.data.TypeDef) dataType;
+                json.append(",\n  \"baseType\": ").append(jsonEscape(typedef.getDataType().getPathName()));
+            } else if (dataType instanceof ghidra.program.model.data.Enum) {
+                json.append(",\n  \"values\": [");
+                json.append(getEnumValues((ghidra.program.model.data.Enum) dataType));
+                json.append("\n  ]");
+            } else if (dataType instanceof ghidra.program.model.data.FunctionDefinition) {
+                ghidra.program.model.data.FunctionDefinition funcDef = (ghidra.program.model.data.FunctionDefinition) dataType;
+                json.append(",\n  \"returnType\": ").append(jsonEscape(funcDef.getReturnType().getPathName()));
+                json.append(",\n  \"hasVarArgs\": ").append(funcDef.hasVarArgs());
+            }
+
+            json.append("\n}");
+            return json.toString();
+
+        } catch (Exception e) {
+            Msg.error(this, "Error getting data type details", e);
+            return "{\"error\": \"Error retrieving data type: " + escapeJson(e.getMessage()) + "\"}";
+        }
+    }
+
+    /**
+     * 获取数据类型的类别名称
+     */
+    private String getDataTypeCategory(DataType dataType) {
+        if (dataType instanceof ghidra.program.model.data.Structure) {
+            return "Structure";
+        } else if (dataType instanceof ghidra.program.model.data.Union) {
+            return "Union";
+        } else if (dataType instanceof ghidra.program.model.data.Enum) {
+            return "Enum";
+        } else if (dataType instanceof ghidra.program.model.data.TypeDef) {
+            return "Typedef";
+        } else if (dataType instanceof ghidra.program.model.data.FunctionDefinition) {
+            return "FunctionDefinition";
+        } else if (dataType instanceof ghidra.program.model.data.Array) {
+            return "Array";
+        } else if (dataType instanceof PointerDataType) {
+            return "Pointer";
+        } else {
+            return "BuiltIn";
+        }
+    }
+
+    /**
+     * 获取结构体的字段列表
+     */
+    private String getStructureFields(ghidra.program.model.data.Structure struct) {
+        StringBuilder json = new StringBuilder();
+        ghidra.program.model.data.DataTypeComponent[] components = struct.getDefinedComponents();
+
+        for (int i = 0; i < components.length; i++) {
+            ghidra.program.model.data.DataTypeComponent component = components[i];
+            if (i > 0) {
+                json.append(",");
+            }
+            json.append("\n    {");
+            json.append("\"name\": ").append(jsonEscape(component.getFieldName()));
+            json.append(", \"offset\": ").append(component.getOffset());
+            json.append(", \"length\": ").append(component.getLength());
+            json.append(", \"dataType\": ").append(jsonEscape(component.getDataType().getPathName()));
+
+            // 添加注释
+            String comment = component.getComment();
+            if (comment != null && !comment.isEmpty()) {
+                json.append(", \"comment\": ").append(jsonEscape(comment));
+            }
+
+            json.append("}");
+        }
+
+        return json.toString();
+    }
+
+    /**
+     * 获取枚举的值列表
+     */
+    private String getEnumValues(ghidra.program.model.data.Enum enumType) {
+        StringBuilder json = new StringBuilder();
+        String[] names = enumType.getNames();
+
+        for (int i = 0; i < names.length; i++) {
+            String name = names[i];
+            if (i > 0) {
+                json.append(",");
+            }
+            json.append("\n    {");
+            json.append("\"name\": ").append(jsonEscape(name));
+            json.append(", \"value\": ").append(enumType.getValue(name));
+
+            // 添加注释
+            String comment = enumType.getComment(name);
+            if (comment != null && !comment.isEmpty()) {
+                json.append(", \"comment\": ").append(jsonEscape(comment));
+            }
+
+            json.append("}");
+        }
+
+        return json.toString();
+    }
+
+    /**
+     * JSON 字符串转义
+     */
+    private String jsonEscape(String input) {
+        if (input == null) {
+            return "\"\"";
+        }
+        return "\"" + input.replace("\\", "\\\\")
+                           .replace("\"", "\\\"")
+                           .replace("\n", "\\n")
+                           .replace("\r", "\\r")
+                           .replace("\t", "\\t") + "\"";
+    }
+
+    /**
+     * 简单的 JSON 转义用于错误消息
+     */
+    private String escapeJson(String input) {
+        if (input == null) {
+            return "";
+        }
+        return input.replace("\\", "\\\\")
+                    .replace("\"", "\\\"")
+                    .replace("\n", "\\n")
+                    .replace("\r", "\\r")
+                    .replace("\t", "\\t");
     }
 
     private String listSegments(int offset, int limit) {
@@ -1501,7 +1989,9 @@ public class GhidraMCPPlugin extends Plugin {
                 return dtm.getDataType("/void");
             default:
                 // Try as a direct path
-                DataType directType = dtm.getDataType("/" + typeName);
+                // 如果 typeName 已经以 / 开头，直接使用；否则添加前缀
+                String typePath = typeName.startsWith("/") ? typeName : "/" + typeName;
+                DataType directType = dtm.getDataType(typePath);
                 if (directType != null) {
                     return directType;
                 }
@@ -1642,17 +2132,786 @@ public class GhidraMCPPlugin extends Plugin {
         return sb.toString();
     }
 
+    /**
+     * 从 JSON 字符串创建枚举数据类型
+     * @param jsonStr JSON 格式的枚举定义
+     * @return 成功消息或错误消息
+     */
+    private String createEnumFromJson(String jsonStr) {
+        Program program = getCurrentProgram();
+        if (program == null) {
+            return "Error: No program loaded";
+        }
+
+        // 简单的 JSON 解析 (不使用外部库)
+        try {
+            // 提取 name
+            String name = extractJsonString(jsonStr, "name");
+            if (name == null || name.isEmpty()) {
+                return "Error: 'name' field is required";
+            }
+
+            // 提取 categoryPath
+            String categoryPath = extractJsonString(jsonStr, "categoryPath");
+            if (categoryPath == null || categoryPath.isEmpty()) {
+                return "Error: 'categoryPath' field is required";
+            }
+
+            // 提取 size
+            int size = extractJsonInt(jsonStr, "size");
+            if (size == -1) {
+                return "Error: 'size' field is required and must be a valid integer";
+            }
+            if (size != 1 && size != 2 && size != 4 && size != 8) {
+                return "Error: 'size' must be 1, 2, 4, or 8";
+            }
+
+            // 提取 description (可选)
+            String description = extractJsonString(jsonStr, "description");
+
+            // 提取 values 数组
+            String valuesArray = extractJsonArray(jsonStr, "values");
+            if (valuesArray == null || valuesArray.isEmpty()) {
+                return "Error: 'values' array is required and must contain at least one value";
+            }
+
+            // 解析枚举值
+            List<EnumValue> enumValues = parseEnumValues(valuesArray);
+            if (enumValues == null) {
+                return "Error: Failed to parse enum values";
+            }
+            if (enumValues.isEmpty()) {
+                return "Error: At least one enum value is required";
+            }
+
+            // 检查枚举值名称是否重复
+            Set<String> valueNames = new HashSet<>();
+            for (EnumValue ev : enumValues) {
+                if (valueNames.contains(ev.name)) {
+                    return "Error: Duplicate enum value name: " + ev.name;
+                }
+                valueNames.add(ev.name);
+            }
+
+            // 创建枚举
+            return createEnum(program, categoryPath, name, size, description, enumValues);
+
+        } catch (Exception e) {
+            Msg.error(this, "Error creating enum from JSON", e);
+            return "Error: Invalid JSON format - " + e.getMessage();
+        }
+    }
+
+    /**
+     * 枚举值内部类
+     */
+    private static class EnumValue {
+        String name;
+        long value;
+        String comment;
+
+        EnumValue(String name, long value, String comment) {
+            this.name = name;
+            this.value = value;
+            this.comment = comment;
+        }
+    }
+
+    /**
+     * 解析枚举值数组
+     */
+    private List<EnumValue> parseEnumValues(String valuesArray) {
+        List<EnumValue> result = new ArrayList<>();
+
+        // valuesArray 格式: [{"name": "RED", "value": 0, "comment": "..."}, ...]
+        // 简单解析: 移除外层方括号,然后按 },{ 分割
+        String content = valuesArray.trim();
+        if (content.startsWith("[")) {
+            content = content.substring(1);
+        }
+        if (content.endsWith("]")) {
+            content = content.substring(0, content.length() - 1);
+        }
+
+        if (content.trim().isEmpty()) {
+            return result;
+        }
+
+        // 分割对象 (简单地按 "},{" 分割)
+        String[] objects = content.split("\\},\\s*\\{");
+
+        for (String obj : objects) {
+            // 移除可能的 { 和 }
+            obj = obj.trim();
+            if (obj.startsWith("{")) {
+                obj = obj.substring(1);
+            }
+            if (obj.endsWith("}")) {
+                obj = obj.substring(0, obj.length() - 1);
+            }
+
+            String name = extractJsonString(obj, "name");
+            long value = extractJsonLong(obj, "value");
+            String comment = extractJsonString(obj, "comment");
+
+            if (name != null && value != -1) {
+                result.add(new EnumValue(name, value, comment));
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * 从 JSON 中提取字符串值
+     */
+    private String extractJsonString(String json, String key) {
+        String pattern = "\"" + key + "\"\\s*:\\s*\"([^\"]*)\"";
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile(pattern);
+        java.util.regex.Matcher m = p.matcher(json);
+        if (m.find()) {
+            return m.group(1);
+        }
+        return null;
+    }
+
+    /**
+     * 从 JSON 中提取整数值
+     */
+    private int extractJsonInt(String json, String key) {
+        String pattern = "\"" + key + "\"\\s*:\\s*(\\d+)";
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile(pattern);
+        java.util.regex.Matcher m = p.matcher(json);
+        if (m.find()) {
+            try {
+                return Integer.parseInt(m.group(1));
+            } catch (NumberFormatException e) {
+                return -1;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * 从 JSON 中提取长整数值
+     */
+    private long extractJsonLong(String json, String key) {
+        String pattern = "\"" + key + "\"\\s*:\\s*(\\d+)";
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile(pattern);
+        java.util.regex.Matcher m = p.matcher(json);
+        if (m.find()) {
+            try {
+                return Long.parseLong(m.group(1));
+            } catch (NumberFormatException e) {
+                return -1;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * 从 JSON 中提取数组
+     */
+    private String extractJsonArray(String json, String key) {
+        String pattern = "\"" + key + "\"\\s*:\\s*(\\[.*?\\])";
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile(pattern);
+        java.util.regex.Matcher m = p.matcher(json);
+        if (m.find()) {
+            return m.group(1);
+        }
+        return null;
+    }
+
+    /**
+     * 创建枚举数据类型
+     */
+    private String createEnum(Program program, String categoryPathStr, String name,
+                             int size, String description, List<EnumValue> enumValues) {
+        final AtomicBoolean success = new AtomicBoolean(false);
+        final StringBuilder errorMsg = new StringBuilder();
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Create enum data type");
+                try {
+                    DataTypeManager dtm = program.getDataTypeManager();
+
+                    // 创建类别路径
+                    CategoryPath categoryPath = new CategoryPath(categoryPathStr);
+
+                    // 检查枚举是否已存在
+                    String fullPath = categoryPath.getPath() + (categoryPath.getPath().endsWith("/") ? "" : "/") + name;
+                    DataType existingType = dtm.getDataType(fullPath);
+                    if (existingType != null) {
+                        errorMsg.append("Error: Enum '" + fullPath + "' already exists");
+                        return;
+                    }
+
+                    // 创建枚举数据类型
+                    EnumDataType enumDT = new EnumDataType(categoryPath, name, size);
+
+                    // 添加描述
+                    if (description != null && !description.isEmpty()) {
+                        enumDT.setDescription(description);
+                    }
+
+                    // 添加枚举值
+                    for (EnumValue ev : enumValues) {
+                        enumDT.add(ev.name, ev.value);
+                        // 枚举值注释暂不支持（Ghidra EnumDataType API 限制）
+                    }
+
+                    // 添加到数据类型管理器
+                    dtm.addDataType(enumDT, null);
+
+                    success.set(true);
+                    Msg.info(this, "Successfully created enum: " + enumDT.getPathName());
+
+                } catch (Exception e) {
+                    errorMsg.append("Error: Failed to create enum - " + e.getMessage());
+                    Msg.error(this, "Error creating enum", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Error: Failed to execute enum creation on Swing thread - " + e.getMessage();
+        }
+
+        if (success.get()) {
+            return "Enum created successfully";
+        } else {
+            return errorMsg.toString();
+        }
+    }
+
     public Program getCurrentProgram() {
         ProgramManager pm = tool.getService(ProgramManager.class);
         return pm != null ? pm.getCurrentProgram() : null;
     }
 
     private void sendResponse(HttpExchange exchange, String response) throws IOException {
+        sendResponse(exchange, response, 200);
+    }
+
+    private void sendResponse(HttpExchange exchange, String response, int statusCode) throws IOException {
         byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
-        exchange.sendResponseHeaders(200, bytes.length);
+        exchange.sendResponseHeaders(statusCode, bytes.length);
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);
+        }
+    }
+
+    
+    /**
+     * 从 JSON 创建结构体数据类型
+     * JSON 格式:
+     * {
+     *   "name": "Person",
+     *   "categoryPath": "/MyTypes",
+     *   "description": "Person information",
+     *   "fields": [
+     *     {"name": "id", "dataType": "/int", "length": 4, "comment": "Person ID"},
+     *     {"name": "name", "dataType": "/char", "length": 32, "comment": "Person name"}
+     *   ]
+     * }
+     */
+    private String createStructFromJson(String jsonStr) {
+        printToConsole("========== CREATE STRUCT START ==========");
+        printToConsole("Received JSON: " + jsonStr);
+
+        Program program = getCurrentProgram();
+        if (program == null) {
+            printErrorToConsole("ERROR - No program loaded!");
+            return "Error: No program loaded";
+        }
+
+        printToConsole("Program loaded: " + program.getName());
+
+        // 简单的 JSON 解析 (不使用外部库)
+        String name = extractJsonString(jsonStr, "name");
+        String categoryPath = extractJsonString(jsonStr, "categoryPath");
+        String description = extractJsonString(jsonStr, "description");
+
+        printToConsole("Parsed - name: '" + name + "', categoryPath: '" + categoryPath + "'");
+
+        // 验证必需字段
+        if (name == null || name.isEmpty()) {
+            return "Error: 'name' field is required";
+        }
+        if (categoryPath == null || categoryPath.isEmpty()) {
+            return "Error: 'categoryPath' field is required";
+        }
+
+        // 提取 fields 数组
+        String fieldsStr = extractJsonArray(jsonStr, "fields");
+        printToConsole("Extracted fields string: " + (fieldsStr != null ? fieldsStr : "null"));
+        if (fieldsStr == null) {
+            return "Error: 'fields' array is required";
+        }
+
+        // 解析字段
+        List<StructField> fields = parseFields(fieldsStr);
+        if (fields == null) {
+            return "Error: Failed to parse fields";
+        }
+
+        // 创建结构体
+        AtomicBoolean success = new AtomicBoolean(false);
+        AtomicString errorMsg = new AtomicString("");
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int txId = program.startTransaction("Create struct: " + name);
+                try {
+                    DataTypeManager dtm = program.getDataTypeManager();
+
+                    // 创建类别路径
+                    // 注意：Ghidra 的根路径 "/" 不能直接用于存放数据类型
+                    // 需要创建一个默认分类或使用用户指定的分类
+                    CategoryPath catPath;
+                    if (categoryPath.equals("/") || categoryPath.isEmpty()) {
+                        // 根路径不能直接使用，创建一个默认分类
+                        catPath = new CategoryPath("/MyTypes");
+                        Msg.info(this, "根路径 / 不支持，自动使用 /MyTypes");
+                    } else {
+                        catPath = new CategoryPath(categoryPath);
+                    }
+
+                    // DEBUG: 详细输出 CategoryPath 信息
+                    printToConsole("=== CategoryPath Debug ===");
+                    printToConsole("Input categoryPath: '" + categoryPath + "'");
+                    printToConsole("Actual catPath: '" + catPath.getPath() + "'");
+                    printToConsole("catPath.toString(): '" + catPath.toString() + "'");
+                    printToConsole("catPath.getName(): '" + catPath.getName() + "'");
+                    printToConsole("========================");
+
+                    // 检查结构体是否已存在
+                    String existingPath = catPath.getPath() + (catPath.getPath().endsWith("/") ? "" : "/") + name;
+                    if (dtm.getDataType(existingPath) != null) {
+                        errorMsg.set("Error: Structure '" + name + "' already exists in category '" + categoryPath + "'");
+                        return;
+                    }
+
+                    // 创建结构体
+                    StructureDataType struct = new StructureDataType(catPath, name, 0);
+                    printToConsole("Created struct object: " + struct.getPathName());
+                    if (description != null && !description.isEmpty()) {
+                        struct.setDescription(description);
+                    }
+
+                    // 添加字段
+                    for (StructField field : fields) {
+                        // DEBUG: 打印字段信息
+                        printToConsole("Processing field: name=" + field.name + ", dataType=" + field.dataType + ", length=" + field.length);
+
+                        // 解析数据类型
+                        DataType fieldType = resolveDataType(dtm, field.dataType);
+                        if (fieldType == null) {
+                            errorMsg.set("Error: Data type '" + field.dataType + "' not found for field '" + field.name + "'");
+                            return;
+                        }
+
+                        printToConsole("Resolved field type: " + fieldType.getPathName() + ", category=" + fieldType.getCategoryPath().getPath());
+
+                        // 添加字段到结构体
+                        try {
+                            DataTypeComponent component = struct.add(fieldType, field.length, field.name, field.comment);
+                            if (component == null) {
+                                errorMsg.set("Error: Failed to add field '" + field.name + "' to structure");
+                                return;
+                            }
+                        } catch (Exception e) {
+                            errorMsg.set("Error: Failed to add field '" + field.name + "': " + e.getMessage());
+                            Msg.error(this, "Failed to add struct field", e);
+                            return;
+                        }
+                    }
+
+                    // 添加到数据类型管理器
+                    DataType addedStruct = dtm.addDataType(struct, null);
+                    if (addedStruct != null) {
+                        success.set(true);
+                        printToConsole("Created structure: " + addedStruct.getPathName());
+                    } else {
+                        errorMsg.set("Error: Failed to add structure to data type manager");
+                    }
+                } catch (Exception e) {
+                    errorMsg.set("Error: Failed to create structure: " + e.getMessage());
+                    printErrorToConsole("Failed to create struct: " + e.getMessage());
+                    Msg.error(this, "Failed to create struct", e);
+                } finally {
+                    program.endTransaction(txId, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            Msg.error(this, "Failed to execute struct creation on Swing thread", e);
+            return "Error: Failed to execute struct creation: " + e.getMessage();
+        }
+
+        if (success.get()) {
+            return "Structure '" + name + "' created successfully in category '" + categoryPath + "'";
+        } else {
+            return errorMsg.get();
+        }
+    }
+
+    /**
+     * 结构体字段定义
+     */
+    private static class StructField {
+        String name;
+        String dataType;
+        int length;
+        String comment;
+
+        StructField(String name, String dataType, int length, String comment) {
+            this.name = name;
+            this.dataType = dataType;
+            this.length = length;
+            this.comment = comment;
+        }
+    }
+
+    /**
+     * 解析字段数组
+     * 输入格式: [{"name":"id","dataType":"/int","length":4,"comment":"Person ID"},{"name":"name",...}]
+     */
+    private List<StructField> parseFields(String fieldsStr) {
+        List<StructField> fields = new ArrayList<>();
+        // 移除开头和结尾的方括号
+        if (fieldsStr.startsWith("[") && fieldsStr.endsWith("]")) {
+            fieldsStr = fieldsStr.substring(1, fieldsStr.length() - 1);
+        }
+
+        if (fieldsStr.trim().isEmpty()) {
+            return fields;
+        }
+
+        // 简单分割字段对象 (不处理嵌套的花括号)
+        int braceLevel = 0;
+        int start = 0;
+        for (int i = 0; i < fieldsStr.length(); i++) {
+            char c = fieldsStr.charAt(i);
+            if (c == '{') braceLevel++;
+            else if (c == '}') braceLevel--;
+            else if (c == ',' && braceLevel == 0) {
+                String fieldStr = fieldsStr.substring(start, i).trim();
+                StructField field = parseField(fieldStr);
+                if (field == null) return null;
+                fields.add(field);
+                start = i + 1;
+            }
+        }
+
+        // 添加最后一个字段
+        String lastFieldStr = fieldsStr.substring(start).trim();
+        if (!lastFieldStr.isEmpty()) {
+            StructField field = parseField(lastFieldStr);
+            if (field == null) return null;
+            fields.add(field);
+        }
+
+        return fields;
+    }
+
+    /**
+     * 解析单个字段
+     * 输入格式: {"name":"id","dataType":"/int","length":4,"comment":"Person ID"}
+     */
+    private StructField parseField(String fieldStr) {
+        // 移除开头和结尾的花括号
+        if (fieldStr.startsWith("{") && fieldStr.endsWith("}")) {
+            fieldStr = fieldStr.substring(1, fieldStr.length() - 1);
+        }
+
+        String name = extractJsonString(fieldStr, "name");
+        String dataType = extractJsonString(fieldStr, "dataType");
+        int length = extractJsonInt(fieldStr, "length");
+        String comment = extractJsonString(fieldStr, "comment");
+
+        // DEBUG
+        Msg.info(this, "parseField: name='" + name + "', dataType='" + dataType + "', length=" + length);
+
+        if (name == null || name.isEmpty()) {
+            return null;
+        }
+        if (dataType == null || dataType.isEmpty()) {
+            return null;
+        }
+
+        return new StructField(name, dataType, length, comment);
+    }
+
+
+    /**
+     * 从 JSON 字符串创建 Typedef 数据类型
+     * @param jsonStr JSON 格式的 Typedef 定义
+     * @return 成功消息或错误消息
+     *
+     * 请求格式:
+     * {
+     *   "name": "MyIntPtr",
+     *   "categoryPath": "/MyTypes",
+     *   "baseDataType": "/int",
+     *   "isPointer": false  // 可选,默认 false
+     * }
+     */
+    private String createTypedefFromJson(String jsonStr) {
+        Program program = getCurrentProgram();
+        if (program == null) {
+            return "Error: No program loaded";
+        }
+
+        // 简单的 JSON 解析 (不使用外部库)
+        try {
+            // 提取必需字段
+            String name = extractJsonString(jsonStr, "name");
+            if (name == null || name.isEmpty()) {
+                return "Error: 'name' field is required";
+            }
+
+            String categoryPath = extractJsonString(jsonStr, "categoryPath");
+            if (categoryPath == null || categoryPath.isEmpty()) {
+                return "Error: 'categoryPath' field is required";
+            }
+
+            String baseDataType = extractJsonString(jsonStr, "baseDataType");
+            if (baseDataType == null || baseDataType.isEmpty()) {
+                return "Error: 'baseDataType' field is required";
+            }
+
+            // 提取可选字段 isPointer
+            String isPointerStr = extractJsonString(jsonStr, "isPointer");
+            boolean isPointer = isPointerStr != null && isPointerStr.equalsIgnoreCase("true");
+
+            // 创建 Typedef
+            return createTypedef(program, categoryPath, name, baseDataType, isPointer);
+
+        } catch (Exception e) {
+            Msg.error(this, "Error creating typedef from JSON", e);
+            return "Error: Invalid JSON format - " + e.getMessage();
+        }
+    }
+
+    /**
+     * 创建 Typedef 数据类型
+     * @param program 程序对象
+     * @param categoryPathStr 类别路径
+     * @param name Typedef 名称
+     * @param baseDataTypeStr 基础数据类型
+     * @param isPointer 是否为指针类型
+     * @return 成功消息或错误消息
+     */
+    private String createTypedef(Program program, String categoryPathStr, String name,
+                                String baseDataTypeStr, boolean isPointer) {
+        final AtomicBoolean success = new AtomicBoolean(false);
+        final AtomicString errorMsg = new AtomicString("");
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Create typedef: " + name);
+                try {
+                    DataTypeManager dtm = program.getDataTypeManager();
+                    CategoryPath catPath = new CategoryPath(categoryPathStr);
+
+                    // 检查 Typedef 是否已存在
+                    String existingPath = catPath.getPath() + (catPath.getPath().endsWith("/") ? "" : "/") + name;
+                    if (dtm.getDataType(existingPath) != null) {
+                        errorMsg.set("Error: Typedef '" + name + "' already exists in category '" + categoryPathStr + "'");
+                        return;
+                    }
+
+                    // 解析基础数据类型
+                    DataType baseType = resolveDataType(dtm, baseDataTypeStr);
+                    if (baseType == null) {
+                        errorMsg.set("Error: Base data type '" + baseDataTypeStr + "' not found");
+                        return;
+                    }
+
+                    // 创建 Typedef
+                    DataType typedef;
+                    if (isPointer) {
+                        // 创建指针 Typedef
+                        typedef = new TypedefDataType(
+                            catPath,
+                            name,
+                            new PointerDataType(baseType)
+                        );
+                    } else {
+                        // 创建普通 Typedef
+                        typedef = new TypedefDataType(
+                            catPath,
+                            name,
+                            baseType
+                        );
+                    }
+
+                    // 添加到数据类型管理器
+                    DataType addedTypedef = dtm.addDataType(typedef, null);
+                    if (addedTypedef != null) {
+                        success.set(true);
+                        Msg.info(this, "Created typedef: " + addedTypedef.getPathName());
+                    } else {
+                        errorMsg.set("Error: Failed to add typedef to data type manager");
+                    }
+                } catch (Exception e) {
+                    errorMsg.set("Error: Failed to create typedef: " + e.getMessage());
+                    Msg.error(this, "Failed to create typedef", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            Msg.error(this, "Failed to execute typedef creation on Swing thread", e);
+            return "Error: Failed to execute typedef creation: " + e.getMessage();
+        }
+
+        if (success.get()) {
+            return "Typedef '" + name + "' created successfully in category '" + categoryPathStr + "'";
+        } else {
+            return errorMsg.get();
+        }
+    }
+
+    /**
+     * 用于在 Lambda 中传递可变字符串
+     */
+    private static class AtomicString {
+        private String value;
+
+        public AtomicString(String initialValue) {
+            this.value = initialValue;
+        }
+
+        public String get() {
+            return value;
+        }
+
+        public void set(String value) {
+            this.value = value;
+        }
+    }
+
+    /**
+     * 从 JSON 字符串创建联合体 (Union) 数据类型
+     * @param jsonStr JSON 格式的联合体定义
+     * @return 成功消息或错误消息
+     *
+     * 请求格式:
+     * {
+     *   "name": "Variant",
+     *   "categoryPath": "/MyTypes",
+     *   "description": "Union data type",
+     *   "fields": [
+     *     {"name": "asInt", "dataType": "/int", "length": 4, "comment": "As integer"},
+     *     {"name": "asFloat", "dataType": "/float", "length": 4, "comment": "As float"}
+     *   ]
+     * }
+     */
+    private String createUnionFromJson(String jsonStr) {
+        Program program = getCurrentProgram();
+        if (program == null) {
+            return "Error: No program loaded";
+        }
+
+        // 简单的 JSON 解析 (不使用外部库)
+        String name = extractJsonString(jsonStr, "name");
+        String categoryPath = extractJsonString(jsonStr, "categoryPath");
+        String description = extractJsonString(jsonStr, "description");
+
+        // 验证必需字段
+        if (name == null || name.isEmpty()) {
+            return "Error: 'name' field is required";
+        }
+        if (categoryPath == null || categoryPath.isEmpty()) {
+            return "Error: 'categoryPath' field is required";
+        }
+
+        // 提取 fields 数组
+        String fieldsStr = extractJsonArray(jsonStr, "fields");
+        if (fieldsStr == null) {
+            return "Error: 'fields' array is required";
+        }
+
+        // 解析字段 (使用与结构体相同的解析逻辑)
+        List<StructField> fields = parseFields(fieldsStr);
+        if (fields == null) {
+            return "Error: Failed to parse fields";
+        }
+
+        // 创建联合体
+        AtomicBoolean success = new AtomicBoolean(false);
+        AtomicString errorMsg = new AtomicString("");
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int txId = program.startTransaction("Create union: " + name);
+                try {
+                    DataTypeManager dtm = program.getDataTypeManager();
+                    CategoryPath catPath = new CategoryPath(categoryPath);
+
+                    // 检查联合体是否已存在
+                    String existingPath = catPath.getPath() + (catPath.getPath().endsWith("/") ? "" : "/") + name;
+                    if (dtm.getDataType(existingPath) != null) {
+                        errorMsg.set("Error: Union '" + name + "' already exists in category '" + categoryPath + "'");
+                        return;
+                    }
+
+                    // 创建联合体 (注意: 联合体的构造函数与结构体相同)
+                    UnionDataType union = new UnionDataType(catPath, name);
+                    if (description != null && !description.isEmpty()) {
+                        union.setDescription(description);
+                    }
+
+                    // 添加字段 (联合体的字段添加逻辑与结构体相同)
+                    for (StructField field : fields) {
+                        // 解析数据类型
+                        DataType fieldType = resolveDataType(dtm, field.dataType);
+                        if (fieldType == null) {
+                            errorMsg.set("Error: Data type '" + field.dataType + "' not found for field '" + field.name + "'");
+                            return;
+                        }
+
+                        // 添加字段到联合体
+                        try {
+                            DataTypeComponent component = union.add(fieldType, field.length, field.name, field.comment);
+                            if (component == null) {
+                                errorMsg.set("Error: Failed to add field '" + field.name + "' to union");
+                                return;
+                            }
+                        } catch (Exception e) {
+                            errorMsg.set("Error: Failed to add field '" + field.name + "': " + e.getMessage());
+                            Msg.error(this, "Failed to add union field", e);
+                            return;
+                        }
+                    }
+
+                    // 添加到数据类型管理器
+                    DataType addedUnion = dtm.addDataType(union, null);
+                    if (addedUnion != null) {
+                        success.set(true);
+                        Msg.info(this, "Created union: " + addedUnion.getPathName());
+                    } else {
+                        errorMsg.set("Error: Failed to add union to data type manager");
+                    }
+                } catch (Exception e) {
+                    errorMsg.set("Error: Failed to create union: " + e.getMessage());
+                    Msg.error(this, "Failed to create union", e);
+                } finally {
+                    program.endTransaction(txId, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            Msg.error(this, "Failed to execute union creation on Swing thread", e);
+            return "Error: Failed to execute union creation: " + e.getMessage();
+        }
+
+        if (success.get()) {
+            return "Union '" + name + "' created successfully in category '" + categoryPath + "'";
+        } else {
+            return errorMsg.get();
         }
     }
 
@@ -1665,5 +2924,29 @@ public class GhidraMCPPlugin extends Plugin {
             Msg.info(this, "GhidraMCP HTTP server stopped.");
         }
         super.dispose();
+    }
+
+    /**
+     * 辅助方法：输出消息到 Ghidra Console
+     * 这比 System.out.println 和 Msg.info 更可靠，因为 ConsoleService 直接输出到 Ghidra Console
+     * ConsoleService.addMessage(source, message) 需要两个参数
+     */
+    private void printToConsole(String message) {
+        if (consoleService != null) {
+            consoleService.addMessage("GhidraMCP", message);
+        }
+        // 同时输出到日志
+        Msg.info(this, message);
+    }
+
+    /**
+     * 辅助方法：输出错误到 Ghidra Console
+     */
+    private void printErrorToConsole(String message) {
+        if (consoleService != null) {
+            consoleService.addErrorMessage("GhidraMCP", message);
+        }
+        // 同时输出到日志
+        Msg.error(this, message);
     }
 }
