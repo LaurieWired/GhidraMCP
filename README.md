@@ -13,6 +13,9 @@ ghidraMCP is an Model Context Protocol server for allowing LLMs to autonomously 
 
 https://github.com/user-attachments/assets/36080514-f227-44bd-af84-78e29ee1d7f9
 
+<a href="https://glama.ai/mcp/servers/@LaurieWired/GhidraMCP">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@LaurieWired/GhidraMCP/badge" alt="ghidraMCP MCP server" />
+</a>
 
 # Features
 MCP Server + Ghidra Plugin
