@@ -98,6 +98,27 @@ Another MCP client that supports multiple models on the backend is [5ire](https:
 2. Name: GhidraMCP
 3. Command: `python /ABSOLUTE_PATH_TO/bridge_mcp_ghidra.py`
 
+# Experimental: MCP over HTTP (No Python Required)
+
+> **Note:** This feature is experimental and may change in future releases.
+
+The Ghidra plugin now exposes a native MCP endpoint at `http://127.0.0.1:8080/mcp`, implementing the [MCP Streamable HTTP transport](https://modelcontextprotocol.io/docs/concepts/transports) directly in Java. This means MCP clients that support HTTP transport can connect to Ghidra without running `bridge_mcp_ghidra.py`.
+
+## Example: Claude Code
+
+A `.mcp.json` file is included in this repository for use with Claude Code:
+
+```json
+{
+  "mcpServers": {
+    "ghidra": {
+      "type": "http",
+      "url": "http://127.0.0.1:8080/mcp"
+    }
+  }
+}
+```
+
 # Building from Source
 1. Copy the following files from your Ghidra directory to this project's `lib/` directory:
 - `Ghidra/Features/Base/lib/Base.jar`
