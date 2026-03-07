@@ -49,6 +49,11 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
 import javax.swing.SwingUtilities;
+
+import static com.lauriewired.JsonValue.arrayBuilder;
+import static com.lauriewired.JsonValue.objectBuilder;
+import static com.lauriewired.JsonValue.parse;
+
 import java.io.IOException;
 import java.io.OutputStream;
 import java.lang.reflect.InvocationTargetException;
@@ -72,6 +77,8 @@ public class GhidraMCPPlugin extends Plugin {
     private static final String PORT_OPTION_NAME = "Server Port";
     private static final int DEFAULT_PORT = 8080;
 
+    private final static List<McpTool> MCP_TOOLS = getMcpTools();
+    
     public GhidraMCPPlugin(PluginTool tool) {
         super(tool);
         Msg.info(this, "GhidraMCPPlugin loading...");
@@ -339,6 +346,14 @@ public class GhidraMCPPlugin extends Plugin {
             int limit = parseIntOrDefault(qparams.get("limit"), 100);
             String filter = qparams.get("filter");
             sendResponse(exchange, listDefinedStrings(offset, limit, filter));
+        });
+
+        server.createContext("/mcp", exchange -> {
+            try {
+                handleMcpHttpRequest(exchange);
+            } catch (Exception e) {
+                Msg.error(this, "Error handling MCP request", e);
+            }
         });
 
         server.setExecutor(null);
@@ -1636,6 +1651,302 @@ public class GhidraMCPPlugin extends Plugin {
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);
         }
+    }
+
+    // ==================================================================================
+    // MCP-over-HTTP implementation
+    // ==================================================================================
+
+    private void handleMcpHttpRequest(HttpExchange exchange) throws IOException {
+        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "POST, OPTIONS");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
+
+        String method = exchange.getRequestMethod();
+        if ("OPTIONS".equalsIgnoreCase(method)) {
+            exchange.sendResponseHeaders(204, -1);
+            return;
+        }
+        if (!"POST".equalsIgnoreCase(method)) {
+            exchange.sendResponseHeaders(405, -1);
+            return;
+        }
+
+        byte[] body = exchange.getRequestBody().readAllBytes();
+        String requestJson = new String(body, StandardCharsets.UTF_8);
+        String responseJson = processMcpRequest(requestJson);
+
+        if (responseJson == null) {
+            exchange.sendResponseHeaders(202, -1);
+            return;
+        }
+
+        byte[] responseBytes = responseJson.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("Content-Type", "application/json");
+        exchange.sendResponseHeaders(200, responseBytes.length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(responseBytes);
+        }
+    }
+
+    private String processMcpRequest(String requestJson) {
+        try {
+            JsonValue request = parse(requestJson);
+            if (!request.has("id")) return null; // notification
+
+            JsonValue id = request.get("id");
+            JsonValue methodVal = request.get("method");
+            if (methodVal.isNull()) {
+                return buildRpcError(id, -32600, "Invalid Request: missing method").toJson();
+            }
+            String methodName = methodVal.asString();
+            JsonValue params = request.has("params") ? request.get("params") : objectBuilder().build();
+            JsonValue response;
+            switch (methodName) {
+                case "initialize": response = handleMcpInitialize(id); break;
+                case "tools/list": response = handleMcpToolsList(id);  break;
+                case "tools/call": response = handleMcpToolCall(id, params); break;
+                case "ping":       response = buildRpcSuccess(id, objectBuilder().build()); break;
+                default:           response = buildRpcError(id, -32601, "Method not found: " + methodName); break;
+            }
+            return response.toJson();
+        } catch (Exception e) {
+            Msg.error(this, "Error processing MCP request", e);
+            return buildRpcError(JsonValue.NULL, -32700, "Parse error: " + e.getMessage()).toJson();
+        }
+    }
+
+    private JsonValue handleMcpInitialize(JsonValue id) {
+        return buildRpcSuccess(id, objectBuilder()
+            .put("protocolVersion", "2025-03-26")
+            .put("capabilities", objectBuilder()
+                .put("tools", objectBuilder().build())
+                .build())
+            .put("serverInfo", objectBuilder()
+                .put("name", "GhidraMCP")
+                .put("version", "1.0.0")
+                .build())
+            .build());
+    }
+
+    private JsonValue handleMcpToolsList(JsonValue id) {
+        JsonValue.ArrayBuilder arr = arrayBuilder();
+        for (McpTool tool : MCP_TOOLS) {
+            arr.add(objectBuilder()
+                .put("name",        tool.name)
+                .put("description", tool.description)
+                .put("inputSchema", tool.inputSchema)
+                .build());
+        }
+        return buildRpcSuccess(id, objectBuilder().put("tools", arr.build()).build());
+    }
+
+    private JsonValue handleMcpToolCall(JsonValue id, JsonValue params) {
+        JsonValue nameVal = params.get("name");
+        if (nameVal.isNull()) {
+            return buildRpcError(id, -32602, "Invalid params: missing name");
+        }
+        JsonValue args = params.has("arguments") ? params.get("arguments")
+                                                 : JsonValue.objectBuilder().build();
+        try {
+            String result = callMcpTool(nameVal.asString(), args);
+            return buildRpcSuccess(id, objectBuilder()
+                .put("content", arrayBuilder()
+                    .add(objectBuilder()
+                        .put("type", "text")
+                        .put("text", result)
+                        .build())
+                    .build())
+                .build());
+        } catch (Exception e) {
+            return buildRpcError(id, -32603, "Internal error: " + e.getMessage());
+        }
+    }
+
+    private String callMcpTool(String toolName, JsonValue args) {
+        int offset = mcpInt(args, "offset", 0);
+        int limit  = mcpInt(args, "limit", 100);
+        switch (toolName) {
+            case "list_methods":
+                return getAllFunctionNames(offset, limit);
+            case "list_classes":
+                return getAllClassNames(offset, limit);
+            case "decompile_function":
+                return decompileFunctionByName(mcpStr(args,"name"));
+            case "rename_function":
+                return renameFunction(mcpStr(args,"oldName"), mcpStr(args,"newName"))? "Renamed successfully" : "Rename failed";
+            case "rename_data":
+                renameDataAtAddress(mcpStr(args,"address"), mcpStr(args,"newName"));
+                return "Rename data attempted";
+            case "list_segments":
+                return listSegments(offset, limit);
+            case "list_imports":
+                return listImports(offset, limit);
+            case "list_exports":
+                return listExports(offset, limit);
+            case "list_namespaces":
+                return listNamespaces(offset, limit);
+            case "list_data_items":
+                return listDefinedData(offset, limit);
+            case "search_functions_by_name":
+                return searchFunctionsByName(mcpStr(args,"query"), offset, limit);
+            case "rename_variable":
+                return renameVariableInFunction(mcpStr(args,"functionName"),mcpStr(args,"oldName"),mcpStr(args,"newName"));
+            case "get_function_by_address":
+                return getFunctionByAddress(mcpStr(args,"address"));
+            case "get_current_address":
+                return getCurrentAddress();
+            case "get_current_function":
+                return getCurrentFunction();
+            case "list_functions":
+                return listFunctions();
+            case "decompile_function_by_address":
+                return decompileFunctionByAddress(mcpStr(args,"address"));
+            case "disassemble_function":
+                return disassembleFunction(mcpStr(args,"address"));
+            case "set_decompiler_comment":
+                return setDecompilerComment(mcpStr(args,"address"), mcpStr(args,"comment")) ? "Comment set successfully" : "Failed to set comment";
+            case "set_disassembly_comment":
+                return setDisassemblyComment(mcpStr(args,"address"), mcpStr(args,"comment")) ? "Comment set successfully" : "Failed to set comment";
+            case "rename_function_by_address":
+                return renameFunctionByAddress(mcpStr(args,"address"), mcpStr(args,"newName"))? "Function renamed successfully" : "Failed to rename function";
+            case "set_function_prototype": {
+                PrototypeResult pr = setFunctionPrototype(mcpStr(args,"address"), mcpStr(args,"prototype"));
+                return pr.isSuccess() ? "Function prototype set successfully" : "Failed: " + pr.getErrorMessage();
+            }
+            case "set_local_variable_type":
+                return setLocalVariableType(mcpStr(args,"address"), mcpStr(args,"variableName"), mcpStr(args,"newType")) ? "Variable type set successfully" : "Failed to set variable type";
+            case "get_xrefs_to":
+                return getXrefsTo(mcpStr(args,"address"), offset, limit);
+            case "get_xrefs_from":
+                return getXrefsFrom(mcpStr(args,"address"), offset, limit);
+            case "get_function_xrefs":
+                return getFunctionXrefs(mcpStr(args,"name"), offset, limit);
+            case "list_strings":
+                return listDefinedStrings(offset, limit, mcpStr(args,"filter"));
+            default:
+                return "Unknown tool: " + toolName;
+        }
+    }
+
+    private static String mcpStr(JsonValue obj, String key) {
+        JsonValue v = obj.get(key);
+        return v.isNull() ? null : v.asString();
+    }
+
+    private static int mcpInt(JsonValue obj, String key, int def) {
+        JsonValue v = obj.get(key);
+        if (v.isNull()) return def;
+        try { return v.asInt(); } catch (Exception e) { return def; }
+    }
+
+    private static JsonValue buildRpcSuccess(JsonValue id, JsonValue result) {
+        return objectBuilder()
+            .put("jsonrpc", "2.0")
+            .put("id", id)
+            .put("result", result)
+            .build();
+    }
+
+    private static JsonValue buildRpcError(JsonValue id, int code, String message) {
+        return objectBuilder()
+            .put("jsonrpc", "2.0")
+            .put("id", id)
+            .put("error", objectBuilder()
+                .put("code", (long) code)
+                .put("message", message)
+                .build())
+            .build();
+    }
+
+    private static List<McpTool> getMcpTools() {
+        List<McpTool> tools = new ArrayList<>();
+        tools.add(new McpTool("list_methods",                 "List all function names in the program",                          schemaPaged()));
+        tools.add(new McpTool("list_classes",                 "List all class/namespace names in the program",                   schemaPaged()));
+        tools.add(new McpTool("decompile_function",           "Decompile a function by its name",                                schemaReq("name")));
+        tools.add(new McpTool("rename_function",              "Rename a function by its current name",                           schemaReq("oldName", "newName")));
+        tools.add(new McpTool("rename_data",                  "Rename data at a given address",                                  schemaReq("address", "newName")));
+        tools.add(new McpTool("list_segments",                "List memory segments/sections",                                   schemaPaged()));
+        tools.add(new McpTool("list_imports",                 "List imported symbols",                                           schemaPaged()));
+        tools.add(new McpTool("list_exports",                 "List exported symbols",                                           schemaPaged()));
+        tools.add(new McpTool("list_namespaces",              "List all namespaces",                                             schemaPaged()));
+        tools.add(new McpTool("list_data_items",              "List defined data items",                                         schemaPaged()));
+        tools.add(new McpTool("search_functions_by_name",     "Search functions by substring",                                   schemaReqPaged("query")));
+        tools.add(new McpTool("rename_variable",              "Rename a variable in a function",                                 schemaReq("functionName", "oldName", "newName")));
+        tools.add(new McpTool("get_function_by_address",      "Get function info at a given address",                            schemaReq("address")));
+        tools.add(new McpTool("get_current_address",          "Get the address currently selected in the Ghidra GUI",            schemaEmpty()));
+        tools.add(new McpTool("get_current_function",         "Get the function at the current Ghidra GUI location",             schemaEmpty()));
+        tools.add(new McpTool("list_functions",               "List all functions with their addresses",                         schemaEmpty()));
+        tools.add(new McpTool("decompile_function_by_address","Decompile a function at a given address",                         schemaReq("address")));
+        tools.add(new McpTool("disassemble_function",         "Get assembly listing for a function at an address",               schemaReq("address")));
+        tools.add(new McpTool("set_decompiler_comment",       "Set a pre-comment at an address (shown in decompiler view)",      schemaReq("address", "comment")));
+        tools.add(new McpTool("set_disassembly_comment",      "Set an end-of-line comment at an address (shown in disassembly)", schemaReq("address", "comment")));
+        tools.add(new McpTool("rename_function_by_address",   "Rename a function identified by its address",                     schemaReq("address", "newName")));
+        tools.add(new McpTool("set_function_prototype",       "Set a function's type signature/prototype",                       schemaReq("address", "prototype")));
+        tools.add(new McpTool("set_local_variable_type",      "Set the data type of a local variable in a function",             schemaReq("address", "variableName", "newType")));
+        tools.add(new McpTool("get_xrefs_to",                 "Get cross-references pointing to a given address",                schemaReqPaged("address")));
+        tools.add(new McpTool("get_xrefs_from",               "Get cross-references going from a given address",                 schemaReqPaged("address")));
+        tools.add(new McpTool("get_function_xrefs",           "Get all call references to a function by name",                   schemaReqPaged("name")));
+        tools.add(new McpTool("list_strings",                 "List defined strings in the program",                             schemaPagedFilter()));
+        return tools;
+    }
+
+    private static JsonValue schemaEmpty() {
+        return objectBuilder()
+            .put("type", "object")
+            .put("properties", objectBuilder().build())
+            .build();
+    }
+
+    private static JsonValue schemaPaged() {
+        return objectBuilder()
+            .put("type", "object")
+            .put("properties", objectBuilder()
+                .put("offset", objectBuilder().put("type", "integer").put("description", "Start index").build())
+                .put("limit",  objectBuilder().put("type", "integer").put("description", "Max items").build())
+                .build())
+            .build();
+    }
+
+    private static JsonValue schemaPagedFilter() {
+        return JsonValue.objectBuilder()
+            .put("type", "object")
+            .put("properties", objectBuilder()
+                .put("filter", objectBuilder().put("type", "string").put("description", "Optional substring filter").build())
+                .put("offset", objectBuilder().put("type", "integer").put("description", "Start index").build())
+                .put("limit",  objectBuilder().put("type", "integer").put("description", "Max items").build())
+                .build())
+            .build();
+    }
+
+    private static JsonValue schemaReq(String... fields) {
+        JsonValue.ArrayBuilder req   = arrayBuilder();
+        JsonValue.ObjectBuilder props = objectBuilder();
+        for (String f : fields) {
+            req.add(f);
+            props.put(f, objectBuilder().put("type", "string").build());
+        }
+        return objectBuilder()
+            .put("type", "object")
+            .put("required", req.build())
+            .put("properties", props.build())
+            .build();
+    }
+
+    private static JsonValue schemaReqPaged(String... fields) {
+        JsonValue.ArrayBuilder req    = arrayBuilder();
+        JsonValue.ObjectBuilder props = objectBuilder();
+        for (String f : fields) {
+            req.add(f);
+            props.put(f, objectBuilder().put("type", "string").build());
+        }
+        props.put("offset", objectBuilder().put("type", "integer").build());
+        props.put("limit",  objectBuilder().put("type", "integer").build());
+        return objectBuilder()
+            .put("type", "object")
+            .put("required", req.build())
+            .put("properties", props.build())
+            .build();
     }
 
     @Override
