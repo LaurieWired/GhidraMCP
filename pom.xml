@@ -69,6 +69,15 @@
       <systemPath>${project.basedir}/lib/Gui.jar</systemPath>
     </dependency>
 
+    <!-- Gson for JSON parsing (bundled with Ghidra) -->
+    <dependency>
+      <groupId>com.google.gson</groupId>
+      <artifactId>gson</artifactId>
+      <version>2.9.0</version>
+      <scope>system</scope>
+      <systemPath>${project.basedir}/lib/gson.jar</systemPath>
+    </dependency>
+
     <!-- JUnit (test only) -->
     <dependency>
       <groupId>junit</groupId>
