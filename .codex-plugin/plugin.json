@@ -1,0 +1,29 @@
+{
+  "name": "ghidra-mcp",
+  "version": "0.1.0",
+  "description": "Ghidra MCP server for Codex CLI - reverse engineer binaries with AI assistance",
+  "author": {
+    "name": "LaurieWired",
+    "url": "https://github.com/LaurieWired"
+  },
+  "homepage": "https://github.com/LaurieWired/GhidraMCP",
+  "repository": "https://github.com/LaurieWired/GhidraMCP",
+  "license": "Apache-2.0",
+  "keywords": [
+    "mcp",
+    "ghidra",
+    "reverse-engineering",
+    "binary",
+    "security"
+  ],
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "GhidraMCP",
+    "shortDescription": "Reverse engineer binaries from Codex via Ghidra MCP",
+    "longDescription": "MCP server for Ghidra that allows LLMs to autonomously reverse engineer applications. Exposes decompilation, analysis, renaming, and listing tools from core Ghidra functionality.",
+    "developerName": "LaurieWired",
+    "category": "Security",
+    "websiteURL": "https://github.com/LaurieWired/GhidraMCP"
+  },
+  "skills": "./skills/"
+}
