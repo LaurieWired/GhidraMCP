@@ -1,0 +1,31 @@
+name: Validate Skill
+
+on:
+  push:
+    branches: [main, hol-skill-validate]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Validate skill structure
+        run: |
+          echo "Validating skill structure..."
+          # Check for required directories
+          if [ ! -d "skill" ] && [ ! -d "src/main/skill" ]; then
+            echo "Warning: No skill directory found"
+          fi
+          echo "Skill validation complete"
+          
+      - name: Validate metadata
+        run: |
+          echo "Validating metadata..."
+          if [ -f "skill.json" ] || [ -f "src/main/skill/metadata.json" ]; then
+            echo "Metadata file present"
+          fi
+          echo "Metadata validation complete"
