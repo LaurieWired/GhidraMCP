@@ -287,6 +287,31 @@ def list_strings(offset: int = 0, limit: int = 2000, filter: str = None) -> list
         params["filter"] = filter
     return safe_get("strings", params)
 
+@mcp.tool()
+def check_server_health() -> str:
+    import json
+
+    url = urljoin(ghidra_server_url, "health")
+    try:
+        response = requests.get(url, timeout=5)
+        if response.ok:
+            data = response.json()
+            status = data.get("status", "UNKNOWN")
+            if status == "OK":
+                return (
+                    f"OK - Server healthy\n"
+                    f"Running: {data.get('server_running')}\n"
+                    f"Watchdog: {data.get('watchdog_healthy')}\n"
+                    f"Program: {data.get('program_loaded')}\n"
+                    f"Uptime: {data.get('uptime_ms')}ms\n"
+                    f"Last request: {data.get('last_request_ms_ago')}ms ago\n"
+                    f"Port: {data.get('port')}"
+                )
+            return f"ERROR - Server unhealthy"
+        return f"ERROR - Server returned status {response.status_code}"
+    except Exception as e:
+        return f"ERROR - Server unreachable: {str(e)}"
+
 def main():
     parser = argparse.ArgumentParser(description="MCP server for Ghidra")
     parser.add_argument("--ghidra-server", type=str, default=DEFAULT_GHIDRA_SERVER,

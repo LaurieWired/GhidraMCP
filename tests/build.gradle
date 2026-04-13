@@ -1,0 +1,60 @@
+apply plugin: 'java'
+apply plugin: 'eclipse'
+
+version = '1.0-SNAPSHOT'
+
+sourceCompatibility = 1.8
+targetCompatibility = 1.8
+
+repositories {
+    flatDir {
+        dirs "${projectDir}/lib/ghidra_11.3.2_PUBLIC/Ghidra/Framework"
+        dirs "${projectDir}/lib/ghidra_11.3.2_PUBLIC/Ghidra/Features/Base"
+        dirs "${projectDir}/lib/ghidra_11.3.2_PUBLIC/Ghidra/Features/Base/lib"
+        dirs "${projectDir}/lib/ghidra_11.3.2_PUBLIC/Ghidra/Framework/lib"
+    }
+    mavenCentral()
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+    
+    def ghidraBase = "${projectDir}/lib/ghidra_11.3.2_PUBLIC/Ghidra"
+    implementation fileTree(dir: "${ghidraBase}/Framework", include: '**/*.jar')
+    implementation fileTree(dir: "${ghidraBase}/Features/Base", include: '**/*.jar')
+    implementation fileTree(dir: "${ghidraBase}/Features/Base/lib", include: '**/*.jar')
+    implementation fileTree(dir: "${ghidraBase}/Features/Decompiler", include: '**/*.jar')
+    implementation fileTree(dir: "${ghidraBase}/Features/Decompiler/lib", include: '**/*.jar')
+    implementation fileTree(dir: "${ghidraBase}/Processors", include: '**/*.jar')
+    implementation fileTree(dir: "${ghidraBase}/Configurations", include: '**/*.jar')
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs = ['src/main/java']
+        }
+    }
+    test {
+        java {
+            srcDirs = ['src/test/java']
+        }
+    }
+}
+
+test {
+    useJUnit()
+    testLogging {
+        events "passed", "skipped", "failed"
+        exceptionFormat = "full"
+    }
+}
+
+jar {
+    manifest {
+        attributes(
+            'Implementation-Title': 'GhidraMCP',
+            'Implementation-Version': version
+        )
+    }
+}

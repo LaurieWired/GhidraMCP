@@ -52,3 +52,12 @@ replay_pid*
 # Third party JAR files from Ghidra
 lib/*.jar
 
+# Python cache
+__pycache__/
+tests/__pycache__/
+*.pyc
+.pytest_cache/
+
+# Gradle test output
+tests/build/
+

@@ -71,6 +71,13 @@ public class GhidraMCPPlugin extends Plugin {
     private static final String OPTION_CATEGORY_NAME = "GhidraMCP HTTP Server";
     private static final String PORT_OPTION_NAME = "Server Port";
     private static final int DEFAULT_PORT = 8080;
+    private static final int WATCHDOG_INTERVAL_MS = 60000;
+    private volatile long lastRequestTimestamp;
+    private volatile long serverStartTime;
+    private volatile boolean watchdogHealthy = true;
+    private Thread watchdogThread;
+    private final Object lastRequestLock = new Object();
+    private final Object watchdogLock = new Object();
 
     public GhidraMCPPlugin(PluginTool tool) {
         super(tool);
@@ -341,14 +348,23 @@ public class GhidraMCPPlugin extends Plugin {
             sendResponse(exchange, listDefinedStrings(offset, limit, filter));
         });
 
+        server.createContext("/health", exchange -> {
+            updateLastRequestTime();
+            String json = buildHealthJson();
+            sendJsonResponse(exchange, json);
+        });
+
         server.setExecutor(null);
         new Thread(() -> {
             try {
                 server.start();
+                serverStartTime = System.currentTimeMillis();
+                lastRequestTimestamp = serverStartTime;
+                startWatchdog();
                 Msg.info(this, "GhidraMCP HTTP server started on port " + port);
             } catch (Exception e) {
                 Msg.error(this, "Failed to start HTTP server on port " + port + ". Port might be in use.", e);
-                server = null; // Ensure server isn't considered running
+                server = null;
             }
         }, "GhidraMCP-HTTP-Server").start();
     }
@@ -1638,12 +1654,69 @@ public class GhidraMCPPlugin extends Plugin {
         }
     }
 
+    private void sendJsonResponse(HttpExchange exchange, String json) throws IOException {
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+        exchange.sendResponseHeaders(200, bytes.length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(bytes);
+        }
+    }
+
+    private void updateLastRequestTime() {
+        synchronized (lastRequestLock) {
+            lastRequestTimestamp = System.currentTimeMillis();
+        }
+    }
+
+    private String buildHealthJson() {
+        long now = System.currentTimeMillis();
+        long uptimeMs = serverStartTime > 0 ? now - serverStartTime : 0;
+        long idleTimeMs;
+        synchronized (lastRequestLock) {
+            idleTimeMs = lastRequestTimestamp > 0 ? now - lastRequestTimestamp : 0;
+        }
+        boolean programLoaded = getCurrentProgram() != null;
+        String status = server != null && watchdogHealthy ? "OK" : "ERROR";
+        return "{\"status\": \"" + status + "\", \"server_running\": " + (server != null) +
+            ", \"watchdog_healthy\": " + watchdogHealthy + ", \"program_loaded\": " + programLoaded +
+            ", \"uptime_ms\": " + uptimeMs + ", \"last_request_ms_ago\": " + idleTimeMs +
+            ", \"port\": " + (server != null ? server.getAddress().getPort() : 0) + "}";
+    }
+
+    private void startWatchdog() {
+        synchronized (watchdogLock) {
+            if (watchdogThread != null && watchdogThread.isAlive()) return;
+            watchdogThread = new Thread(() -> {
+                while (!Thread.currentThread().isInterrupted()) {
+                    try { Thread.sleep(WATCHDOG_INTERVAL_MS); runWatchdogCheck(); }
+                    catch (InterruptedException e) { break; }
+                }
+            }, "GhidraMCP-Watchdog");
+            watchdogThread.setDaemon(true);
+            watchdogThread.start();
+        }
+    }
+
+    private void runWatchdogCheck() {
+        if (server == null) { watchdogHealthy = false; return; }
+        long idleTime = System.currentTimeMillis() - lastRequestTimestamp;
+        if (idleTime > WATCHDOG_INTERVAL_MS * 2) watchdogHealthy = false;
+        else watchdogHealthy = true;
+    }
+
     @Override
     public void dispose() {
+        synchronized (watchdogLock) {
+            if (watchdogThread != null && watchdogThread.isAlive()) {
+                watchdogThread.interrupt();
+                try { watchdogThread.join(2000); } catch (InterruptedException e) {}
+            }
+        }
         if (server != null) {
             Msg.info(this, "Stopping GhidraMCP HTTP server...");
-            server.stop(1); // Stop with a small delay (e.g., 1 second) for connections to finish
-            server = null; // Nullify the reference
+            server.stop(1);
+            server = null;
             Msg.info(this, "GhidraMCP HTTP server stopped.");
         }
         super.dispose();
