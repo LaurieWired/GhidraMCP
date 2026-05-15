@@ -341,6 +341,16 @@ public class GhidraMCPPlugin extends Plugin {
             sendResponse(exchange, listDefinedStrings(offset, limit, filter));
         });
 
+        // ── Memory search ────────────────────────────────────────────────
+        server.createContext("/search_memory", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String pattern = qparams.get("pattern");
+            String startAddr = qparams.get("start");
+            String endAddr = qparams.get("end");
+            int maxResults = parseIntOrDefault(qparams.get("max"), 100);
+            sendResponse(exchange, searchMemory(pattern, startAddr, endAddr, maxResults));
+        });
+
         server.setExecutor(null);
         new Thread(() -> {
             try {
@@ -1525,6 +1535,89 @@ public class GhidraMCPPlugin extends Plugin {
             }
         }
         return null;
+    }
+
+    // ----------------------------------------------------------------------------------
+    // Memory search
+    // ----------------------------------------------------------------------------------
+
+    /** Search memory for a hex byte pattern; '??' is a wildcard nibble-pair. */
+    private String searchMemory(String pattern, String startAddrStr, String endAddrStr, int maxResults) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (pattern == null || pattern.isEmpty()) return "Pattern is required";
+
+        try {
+            // parse hex pattern into bytes + wildcard mask
+            String cleaned = pattern.replaceAll("\\s+", "").toUpperCase();
+            if (cleaned.length() % 2 != 0) return "Invalid hex pattern: odd number of characters";
+
+            int len = cleaned.length() / 2;
+            byte[] bytes = new byte[len];
+            byte[] mask = new byte[len];
+
+            for (int i = 0; i < len; i++) {
+                String byteStr = cleaned.substring(i * 2, i * 2 + 2);
+                if (byteStr.equals("??")) {
+                    bytes[i] = 0;
+                    mask[i] = 0;
+                } else {
+                    bytes[i] = (byte) Integer.parseInt(byteStr, 16);
+                    mask[i] = (byte) 0xFF;
+                }
+            }
+
+            // determine search range
+            Address start;
+            if (startAddrStr != null && !startAddrStr.isEmpty()) {
+                start = program.getAddressFactory().getAddress(startAddrStr);
+            } else {
+                start = program.getMinAddress();
+            }
+            Address end;
+            if (endAddrStr != null && !endAddrStr.isEmpty()) {
+                end = program.getAddressFactory().getAddress(endAddrStr);
+            } else {
+                end = program.getMaxAddress();
+            }
+            if (start == null || end == null) return "Invalid address range";
+
+            // scan
+            ghidra.program.model.mem.Memory memory = program.getMemory();
+            List<String> results = new ArrayList<>();
+            Address current = start;
+
+            while (current != null && current.compareTo(end) <= 0 && results.size() < maxResults) {
+                Address found = memory.findBytes(current, end, bytes, mask, true, new ConsoleTaskMonitor());
+                if (found == null) break;
+
+                Function func = program.getFunctionManager().getFunctionContaining(found);
+                String funcInfo;
+                if (func != null) {
+                    funcInfo = " in " + func.getName();
+                } else {
+                    funcInfo = "";
+                }
+
+                byte[] actualBytes = new byte[len];
+                memory.getBytes(found, actualBytes);
+                StringBuilder hexDisplay = new StringBuilder();
+                for (byte b : actualBytes) {
+                    hexDisplay.append(String.format("%02X ", b & 0xFF));
+                }
+
+                results.add(String.format("%s: %s%s", found, hexDisplay.toString().trim(), funcInfo));
+                current = found.add(1);
+            }
+
+            if (results.isEmpty()) {
+                return "No matches found for pattern: " + pattern;
+            }
+            return String.format("Found %d match(es):\n%s", results.size(), String.join("\n", results));
+
+        } catch (Exception e) {
+            return "Error searching memory: " + e.getMessage();
+        }
     }
 
     // ----------------------------------------------------------------------------------

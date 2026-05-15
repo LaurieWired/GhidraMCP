@@ -406,6 +406,28 @@ def list_projects(project_dir: str = None) -> str:
     return f"Projects in {project_dir}:\n" + "\n".join(projects)
 
 
+@mcp.tool()
+def search_memory(pattern: str, start: str = None, end: str = None, max_results: int = 100) -> str:
+    """
+    Search memory for a hex byte pattern. Supports wildcards with '??'.
+
+    Args:
+        pattern: Hex byte pattern (e.g. "48 8B 05", "FF 15 ?? ?? ?? ??", "deadbeef")
+        start: Start address for search range (default: program start)
+        end: End address for search range (default: program end)
+        max_results: Maximum number of results to return (default: 100)
+
+    Returns:
+        List of addresses where the pattern was found, with context.
+    """
+    params = {"pattern": pattern, "max": max_results}
+    if start:
+        params["start"] = start
+    if end:
+        params["end"] = end
+    return "\n".join(safe_get("search_memory", params))
+
+
 def main():
     parser = argparse.ArgumentParser(description="MCP server for Ghidra")
     parser.add_argument("--ghidra-server", type=str, default=DEFAULT_GHIDRA_SERVER,
