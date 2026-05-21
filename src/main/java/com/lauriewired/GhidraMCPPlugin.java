@@ -436,6 +436,13 @@ public class GhidraMCPPlugin extends Plugin {
             sendResponse(exchange, getStructure(name));
         });
 
+        server.createContext("/create_function", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String address = params.get("address");
+            String name = params.get("name"); // optional; null => Ghidra default name
+            sendResponse(exchange, createFunctionAtAddress(address, name));
+        });
+
         server.setExecutor(null);
         new Thread(() -> {
             try {
@@ -2225,6 +2232,87 @@ public class GhidraMCPPlugin extends Plugin {
                 comp.getLength()));
         }
         return sb.toString();
+    }
+
+    // ----------------------------------------------------------------------------------
+    // Function creation
+    // ----------------------------------------------------------------------------------
+
+    /**
+     * Create a new function at the given entry address. Disassembly and body
+     * computation are delegated to Ghidra's CreateFunctionCmd, which mirrors
+     * what the "Create Function" UI action does.
+     *
+     * @param addressStr entry-point address in hex (e.g. "0x1400010a0")
+     * @param name       optional function name; null/empty means let Ghidra
+     *                   assign the default FUN_&lt;addr&gt; name
+     */
+    private String createFunctionAtAddress(String addressStr, String name) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+
+        StringBuilder result = new StringBuilder();
+        AtomicBoolean success = new AtomicBoolean(false);
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                Address entry;
+                try {
+                    entry = program.getAddressFactory().getAddress(addressStr);
+                } catch (Exception e) {
+                    result.append("Error: invalid address '").append(addressStr).append("'");
+                    return;
+                }
+                if (entry == null) {
+                    result.append("Error: could not parse address '").append(addressStr).append("'");
+                    return;
+                }
+
+                Function existing = program.getFunctionManager().getFunctionAt(entry);
+                if (existing != null) {
+                    result.append("Error: a function already exists at ").append(entry)
+                          .append(" (name='").append(existing.getName()).append("')");
+                    return;
+                }
+
+                String effectiveName = (name == null || name.isEmpty()) ? null : name;
+
+                int tx = program.startTransaction("Create function at " + addressStr);
+                try {
+                    ghidra.app.cmd.function.CreateFunctionCmd cmd =
+                        new ghidra.app.cmd.function.CreateFunctionCmd(
+                            effectiveName, entry, null, SourceType.USER_DEFINED);
+                    boolean ok = cmd.applyTo(program, new ConsoleTaskMonitor());
+                    if (!ok) {
+                        result.append("Failed to create function: ").append(cmd.getStatusMsg());
+                        return;
+                    }
+
+                    Function created = program.getFunctionManager().getFunctionAt(entry);
+                    if (created == null) {
+                        result.append("CreateFunctionCmd reported success but no function exists at ")
+                              .append(entry);
+                        return;
+                    }
+
+                    success.set(true);
+                    result.append("Created function '").append(created.getName())
+                          .append("' at ").append(entry)
+                          .append(" (body: ").append(created.getBody().getMinAddress())
+                          .append(" - ").append(created.getBody().getMaxAddress()).append(")");
+                } catch (Exception e) {
+                    result.append("Error creating function: ").append(e.getMessage());
+                    Msg.error(this, "Error creating function", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed to execute create function on Swing thread: " + e.getMessage();
+        }
+
+        return result.toString();
     }
 
     // ----------------------------------------------------------------------------------

@@ -288,6 +288,24 @@ def list_strings(offset: int = 0, limit: int = 2000, filter: str = None) -> list
     return safe_get("strings", params)
 
 @mcp.tool()
+def create_function(address: str, name: str = "") -> str:
+    """
+    Create a new function at the given entry address.
+
+    Uses Ghidra's CreateFunctionCmd, so disassembly and body computation happen
+    automatically (the same path as the "Create Function" UI action).
+
+    Args:
+        address: Entry-point address in hex (e.g. "0x1400010a0").
+        name: Optional function name. If omitted, Ghidra assigns the default
+              FUN_<addr> name.
+    """
+    data = {"address": address}
+    if name:
+        data["name"] = name
+    return safe_post("create_function", data)
+
+@mcp.tool()
 def create_structure(name: str, size: int = 0) -> str:
     """
     Create a new structure data type in the program's data type manager.
