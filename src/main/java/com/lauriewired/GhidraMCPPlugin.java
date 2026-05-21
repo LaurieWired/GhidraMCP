@@ -36,9 +36,15 @@ import ghidra.util.task.ConsoleTaskMonitor;
 import ghidra.util.task.TaskMonitor;
 import ghidra.program.model.pcode.HighVariable;
 import ghidra.program.model.pcode.Varnode;
+import ghidra.program.model.data.CategoryPath;
 import ghidra.program.model.data.DataType;
+import ghidra.program.model.data.DataTypeComponent;
+import ghidra.program.model.data.DataTypeConflictHandler;
 import ghidra.program.model.data.DataTypeManager;
 import ghidra.program.model.data.PointerDataType;
+import ghidra.program.model.data.Structure;
+import ghidra.program.model.data.StructureDataType;
+import ghidra.program.model.data.TypedefDataType;
 import ghidra.program.model.data.Undefined1DataType;
 import ghidra.program.model.listing.Variable;
 import ghidra.app.decompiler.component.DecompilerUtils;
@@ -339,6 +345,95 @@ public class GhidraMCPPlugin extends Plugin {
             int limit = parseIntOrDefault(qparams.get("limit"), 100);
             String filter = qparams.get("filter");
             sendResponse(exchange, listDefinedStrings(offset, limit, filter));
+        });
+
+        // Structure / pointer creation endpoints
+
+        server.createContext("/create_structure", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String name = params.get("name");
+            int size = parseIntOrDefault(params.get("size"), 0);
+            sendResponse(exchange, createStructure(name, size));
+        });
+
+        server.createContext("/add_structure_field", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String structName = params.get("struct_name");
+            String fieldName = params.get("field_name");
+            String fieldType = params.get("field_type");
+            String offsetStr = params.get("offset");
+            Integer fieldOffset = (offsetStr == null || offsetStr.isEmpty())
+                ? null
+                : Integer.valueOf(parseIntOrDefault(offsetStr, -1));
+            sendResponse(exchange, addStructureField(structName, fieldName, fieldType, fieldOffset));
+        });
+
+        server.createContext("/rename_structure_field", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String structName = params.get("struct_name");
+            String oldFieldName = params.get("old_field_name");
+            String newFieldName = params.get("new_field_name");
+            sendResponse(exchange, renameStructureField(structName, oldFieldName, newFieldName));
+        });
+
+        server.createContext("/delete_structure_field", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String structName = params.get("struct_name");
+            String fieldName = params.get("field_name");
+            sendResponse(exchange, deleteStructureField(structName, fieldName));
+        });
+
+        server.createContext("/set_field_type", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String structName = params.get("struct_name");
+            String fieldName = params.get("field_name");
+            String newType = params.get("new_type");
+            String lengthStr = params.get("length");
+            Integer length = (lengthStr == null || lengthStr.isEmpty())
+                ? null
+                : Integer.valueOf(parseIntOrDefault(lengthStr, -1));
+            sendResponse(exchange, setStructureFieldType(structName, fieldName, newType, length));
+        });
+
+        server.createContext("/resize_structure_field", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String structName = params.get("struct_name");
+            String fieldName = params.get("field_name");
+            int newLength = parseIntOrDefault(params.get("new_length"), -1);
+            sendResponse(exchange, resizeStructureField(structName, fieldName, newLength));
+        });
+
+        server.createContext("/rename_structure", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String oldName = params.get("old_name");
+            String newName = params.get("new_name");
+            sendResponse(exchange, renameStructure(oldName, newName));
+        });
+
+        server.createContext("/delete_structure", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String name = params.get("name");
+            sendResponse(exchange, deleteStructure(name));
+        });
+
+        server.createContext("/create_structure_pointer", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String structName = params.get("struct_name");
+            String pointerName = params.get("pointer_name"); // optional typedef name
+            sendResponse(exchange, createStructurePointer(structName, pointerName));
+        });
+
+        server.createContext("/list_structures", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            int offset = parseIntOrDefault(qparams.get("offset"), 0);
+            int limit  = parseIntOrDefault(qparams.get("limit"),  100);
+            sendResponse(exchange, listStructures(offset, limit));
+        });
+
+        server.createContext("/get_structure", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String name = qparams.get("name");
+            sendResponse(exchange, getStructure(name));
         });
 
         server.setExecutor(null);
@@ -1427,6 +1522,18 @@ public class GhidraMCPPlugin extends Plugin {
             return dataType;
         }
 
+        // Handle conventional "<Name> *" / "<Name>*" pointer syntax (e.g. "MyStruct *", "int **")
+        String trimmed = typeName.trim();
+        if (trimmed.endsWith("*")) {
+            String baseName = trimmed.substring(0, trimmed.length() - 1).trim();
+            if (!baseName.isEmpty()) {
+                DataType base = resolveDataType(dtm, baseName);
+                if (base != null) {
+                    return new PointerDataType(base);
+                }
+            }
+        }
+
         // Check for Windows-style pointer types (PXXX)
         if (typeName.startsWith("P") && typeName.length() > 1) {
             String baseTypeName = typeName.substring(1);
@@ -1525,6 +1632,599 @@ public class GhidraMCPPlugin extends Plugin {
             }
         }
         return null;
+    }
+
+    // ----------------------------------------------------------------------------------
+    // Structure creation / inspection
+    // ----------------------------------------------------------------------------------
+
+    /**
+     * Create a new structure data type in the program's data type manager.
+     * A size of 0 creates an empty structure; a positive size reserves that
+     * many bytes up front. In both cases the structure still grows as fields
+     * are appended past its current length.
+     */
+    private String createStructure(String name, int size) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (name == null || name.isEmpty()) return "Structure name is required";
+        if (size < 0) return "Structure size must be >= 0";
+
+        StringBuilder result = new StringBuilder();
+        AtomicBoolean success = new AtomicBoolean(false);
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                DataTypeManager dtm = program.getDataTypeManager();
+
+                DataType existing = findDataTypeByNameInAllCategories(dtm, name);
+                if (existing != null) {
+                    result.append("Error: a data type named '").append(name)
+                          .append("' already exists at ").append(existing.getPathName());
+                    return;
+                }
+
+                int tx = program.startTransaction("Create structure " + name);
+                try {
+                    StructureDataType struct =
+                        new StructureDataType(CategoryPath.ROOT, name, size, dtm);
+                    DataType added = dtm.addDataType(struct, DataTypeConflictHandler.DEFAULT_HANDLER);
+                    success.set(true);
+                    result.append("Created structure '").append(added.getPathName())
+                          .append("' (size=").append(added.getLength()).append(")");
+                } catch (Exception e) {
+                    result.append("Error creating structure: ").append(e.getMessage());
+                    Msg.error(this, "Error creating structure", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed to execute create structure on Swing thread: " + e.getMessage();
+        }
+
+        return result.toString();
+    }
+
+    /**
+     * Add a field to an existing structure.
+     * If offset is null, the field is appended; otherwise it is inserted at that byte offset.
+     */
+    private String addStructureField(String structName, String fieldName,
+                                     String fieldType, Integer offset) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (structName == null || structName.isEmpty()) return "Structure name is required";
+        if (fieldName == null || fieldName.isEmpty()) return "Field name is required";
+        if (fieldType == null || fieldType.isEmpty()) return "Field type is required";
+
+        StringBuilder result = new StringBuilder();
+        AtomicBoolean success = new AtomicBoolean(false);
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                DataTypeManager dtm = program.getDataTypeManager();
+
+                DataType existing = findDataTypeByNameInAllCategories(dtm, structName);
+                if (!(existing instanceof Structure)) {
+                    result.append("Error: '").append(structName).append("' is not a structure");
+                    if (existing != null) {
+                        result.append(" (found ").append(existing.getClass().getSimpleName()).append(")");
+                    }
+                    return;
+                }
+                Structure struct = (Structure) existing;
+
+                DataType fieldDt = resolveDataType(dtm, fieldType);
+                if (fieldDt == null) {
+                    result.append("Error: could not resolve field type: ").append(fieldType);
+                    return;
+                }
+
+                int tx = program.startTransaction("Add field to " + structName);
+                try {
+                    if (offset == null) {
+                        struct.add(fieldDt, fieldName, null);
+                        result.append("Appended field '").append(fieldName)
+                              .append("' (type=").append(fieldDt.getName())
+                              .append(") to ").append(struct.getPathName())
+                              .append(" (new size=").append(struct.getLength()).append(")");
+                    } else {
+                        if (offset.intValue() < 0) {
+                            result.append("Error: offset must be >= 0");
+                            return;
+                        }
+                        struct.insertAtOffset(offset.intValue(), fieldDt, fieldDt.getLength(),
+                            fieldName, null);
+                        result.append("Inserted field '").append(fieldName)
+                              .append("' (type=").append(fieldDt.getName())
+                              .append(") at offset ").append(offset)
+                              .append(" in ").append(struct.getPathName())
+                              .append(" (new size=").append(struct.getLength()).append(")");
+                    }
+                    success.set(true);
+                } catch (Exception e) {
+                    result.append("Error adding field: ").append(e.getMessage());
+                    Msg.error(this, "Error adding structure field", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed to execute add structure field on Swing thread: " + e.getMessage();
+        }
+
+        return result.toString();
+    }
+
+    /**
+     * Rename a field in an existing structure (identified by its current name).
+     * Returns an error if the field is not found, the new name collides with another
+     * field, or the new name is otherwise invalid.
+     */
+    private String renameStructureField(String structName, String oldFieldName, String newFieldName) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (structName == null || structName.isEmpty()) return "Structure name is required";
+        if (oldFieldName == null || oldFieldName.isEmpty()) return "Old field name is required";
+        if (newFieldName == null || newFieldName.isEmpty()) return "New field name is required";
+
+        StringBuilder result = new StringBuilder();
+        AtomicBoolean success = new AtomicBoolean(false);
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                DataTypeManager dtm = program.getDataTypeManager();
+
+                DataType existing = findDataTypeByNameInAllCategories(dtm, structName);
+                if (!(existing instanceof Structure)) {
+                    result.append("Error: '").append(structName).append("' is not a structure");
+                    return;
+                }
+                Structure struct = (Structure) existing;
+
+                DataTypeComponent target = findStructureFieldByName(struct, oldFieldName);
+                if (target == null) {
+                    result.append("Error: field '").append(oldFieldName)
+                          .append("' not found in ").append(struct.getPathName());
+                    return;
+                }
+
+                int tx = program.startTransaction("Rename field in " + structName);
+                try {
+                    target.setFieldName(newFieldName);
+                    success.set(true);
+                    result.append("Renamed field '").append(oldFieldName)
+                          .append("' to '").append(newFieldName)
+                          .append("' in ").append(struct.getPathName());
+                } catch (DuplicateNameException e) {
+                    result.append("Error: a field named '").append(newFieldName)
+                          .append("' already exists in ").append(struct.getPathName());
+                } catch (Exception e) {
+                    result.append("Error renaming field: ").append(e.getMessage());
+                    Msg.error(this, "Error renaming structure field", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed to execute rename structure field on Swing thread: " + e.getMessage();
+        }
+
+        return result.toString();
+    }
+
+    /**
+     * Delete a field from an existing structure (identified by its current name).
+     */
+    private String deleteStructureField(String structName, String fieldName) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (structName == null || structName.isEmpty()) return "Structure name is required";
+        if (fieldName == null || fieldName.isEmpty()) return "Field name is required";
+
+        StringBuilder result = new StringBuilder();
+        AtomicBoolean success = new AtomicBoolean(false);
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                DataTypeManager dtm = program.getDataTypeManager();
+
+                DataType existing = findDataTypeByNameInAllCategories(dtm, structName);
+                if (!(existing instanceof Structure)) {
+                    result.append("Error: '").append(structName).append("' is not a structure");
+                    return;
+                }
+                Structure struct = (Structure) existing;
+
+                DataTypeComponent target = findStructureFieldByName(struct, fieldName);
+                if (target == null) {
+                    result.append("Error: field '").append(fieldName)
+                          .append("' not found in ").append(struct.getPathName());
+                    return;
+                }
+
+                int ordinal = target.getOrdinal();
+                int tx = program.startTransaction("Delete field from " + structName);
+                try {
+                    struct.delete(ordinal);
+                    success.set(true);
+                    result.append("Deleted field '").append(fieldName)
+                          .append("' from ").append(struct.getPathName())
+                          .append(" (new size=").append(struct.getLength()).append(")");
+                } catch (Exception e) {
+                    result.append("Error deleting field: ").append(e.getMessage());
+                    Msg.error(this, "Error deleting structure field", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed to execute delete structure field on Swing thread: " + e.getMessage();
+        }
+
+        return result.toString();
+    }
+
+    /**
+     * Change the data type of a field. If the new type is larger than the
+     * current field, subsequent components in the structure are absorbed; if it
+     * is smaller, the freed bytes become undefined.
+     *
+     * @param length optional explicit byte length; null means use the new
+     *               type's natural length. Required for types with dynamic
+     *               size (e.g. array of unknown bound).
+     */
+    private String setStructureFieldType(String structName, String fieldName,
+                                         String newType, Integer length) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (structName == null || structName.isEmpty()) return "Structure name is required";
+        if (fieldName == null || fieldName.isEmpty()) return "Field name is required";
+        if (newType == null || newType.isEmpty()) return "New type is required";
+
+        StringBuilder result = new StringBuilder();
+        AtomicBoolean success = new AtomicBoolean(false);
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                DataTypeManager dtm = program.getDataTypeManager();
+
+                DataType existing = findDataTypeByNameInAllCategories(dtm, structName);
+                if (!(existing instanceof Structure)) {
+                    result.append("Error: '").append(structName).append("' is not a structure");
+                    return;
+                }
+                Structure struct = (Structure) existing;
+
+                DataTypeComponent target = findStructureFieldByName(struct, fieldName);
+                if (target == null) {
+                    result.append("Error: field '").append(fieldName)
+                          .append("' not found in ").append(struct.getPathName());
+                    return;
+                }
+
+                DataType resolved = resolveDataType(dtm, newType);
+                if (resolved == null) {
+                    result.append("Error: could not resolve type: ").append(newType);
+                    return;
+                }
+
+                int effectiveLength = (length != null) ? length.intValue() : resolved.getLength();
+                if (effectiveLength <= 0) {
+                    result.append("Error: type '").append(resolved.getName())
+                          .append("' has no fixed length; pass an explicit 'length' parameter");
+                    return;
+                }
+
+                int offset = target.getOffset();
+                String preservedName = target.getFieldName();
+                String preservedComment = target.getComment();
+
+                int tx = program.startTransaction(
+                    "Set field type in " + structName + "." + fieldName);
+                try {
+                    struct.replaceAtOffset(offset, resolved, effectiveLength,
+                        preservedName, preservedComment);
+                    success.set(true);
+                    result.append("Set field '").append(fieldName)
+                          .append("' in ").append(struct.getPathName())
+                          .append(" to type ").append(resolved.getName())
+                          .append(" (length=").append(effectiveLength)
+                          .append(", new struct size=").append(struct.getLength()).append(")");
+                } catch (Exception e) {
+                    result.append("Error setting field type: ").append(e.getMessage());
+                    Msg.error(this, "Error setting structure field type", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed to execute set field type on Swing thread: " + e.getMessage();
+        }
+
+        return result.toString();
+    }
+
+    /**
+     * Change a field's length in bytes while preserving its data type. Useful
+     * for adjusting array bounds or claiming/releasing adjacent undefined bytes.
+     */
+    private String resizeStructureField(String structName, String fieldName, int newLength) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (structName == null || structName.isEmpty()) return "Structure name is required";
+        if (fieldName == null || fieldName.isEmpty()) return "Field name is required";
+        if (newLength <= 0) return "New length must be > 0";
+
+        StringBuilder result = new StringBuilder();
+        AtomicBoolean success = new AtomicBoolean(false);
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                DataTypeManager dtm = program.getDataTypeManager();
+
+                DataType existing = findDataTypeByNameInAllCategories(dtm, structName);
+                if (!(existing instanceof Structure)) {
+                    result.append("Error: '").append(structName).append("' is not a structure");
+                    return;
+                }
+                Structure struct = (Structure) existing;
+
+                DataTypeComponent target = findStructureFieldByName(struct, fieldName);
+                if (target == null) {
+                    result.append("Error: field '").append(fieldName)
+                          .append("' not found in ").append(struct.getPathName());
+                    return;
+                }
+
+                int oldLength = target.getLength();
+                if (oldLength == newLength) {
+                    result.append("No change: field '").append(fieldName)
+                          .append("' already has length ").append(newLength);
+                    return;
+                }
+
+                int offset = target.getOffset();
+                DataType fieldType = target.getDataType();
+                String preservedName = target.getFieldName();
+                String preservedComment = target.getComment();
+
+                int tx = program.startTransaction(
+                    "Resize field " + structName + "." + fieldName);
+                try {
+                    struct.replaceAtOffset(offset, fieldType, newLength,
+                        preservedName, preservedComment);
+                    success.set(true);
+                    result.append("Resized field '").append(fieldName)
+                          .append("' in ").append(struct.getPathName())
+                          .append(" from ").append(oldLength)
+                          .append(" to ").append(newLength).append(" bytes")
+                          .append(" (new struct size=").append(struct.getLength()).append(")");
+                } catch (Exception e) {
+                    result.append("Error resizing field: ").append(e.getMessage());
+                    Msg.error(this, "Error resizing structure field", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed to execute resize structure field on Swing thread: " + e.getMessage();
+        }
+
+        return result.toString();
+    }
+
+    /**
+     * Find a field in a structure by name. Returns null if not found.
+     * Matches against both explicit field names and Ghidra's default-generated names
+     * (so e.g. "field_0x4" works for unnamed fields).
+     */
+    private DataTypeComponent findStructureFieldByName(Structure struct, String fieldName) {
+        for (DataTypeComponent comp : struct.getComponents()) {
+            String name = comp.getFieldName();
+            if (name == null) name = comp.getDefaultFieldName();
+            if (fieldName.equals(name)) {
+                return comp;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Rename an existing structure data type.
+     * References to the structure (function parameters, struct fields, etc.) are
+     * updated automatically by the data type manager.
+     *
+     * Note: DataTypeManager mutations are thread-safe through the manager's own
+     * lock; running on the HTTP worker thread (rather than dispatching to the
+     * Swing EDT) avoids deadlocks observed when listener chains fired during
+     * setName tried to flush back through the EDT.
+     */
+    private String renameStructure(String oldName, String newName) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (oldName == null || oldName.isEmpty()) return "Old structure name is required";
+        if (newName == null || newName.isEmpty()) return "New structure name is required";
+
+        DataTypeManager dtm = program.getDataTypeManager();
+
+        DataType existing = findDataTypeByNameInAllCategories(dtm, oldName);
+        if (!(existing instanceof Structure)) {
+            return "Error: '" + oldName + "' is not a structure";
+        }
+
+        DataType clash = findDataTypeByNameInAllCategories(dtm, newName);
+        if (clash != null && clash != existing) {
+            return "Error: a data type named '" + newName
+                + "' already exists at " + clash.getPathName();
+        }
+
+        int tx = program.startTransaction("Rename structure " + oldName);
+        boolean success = false;
+        try {
+            existing.setName(newName);
+            success = true;
+            return "Renamed structure '" + oldName
+                + "' to '" + existing.getPathName() + "'";
+        } catch (DuplicateNameException e) {
+            return "Error: a data type named '" + newName + "' already exists";
+        } catch (Exception e) {
+            Msg.error(this, "Error renaming structure", e);
+            return "Error renaming structure: " + e.getMessage();
+        } finally {
+            program.endTransaction(tx, success);
+        }
+    }
+
+    /**
+     * Delete a structure data type from the program's data type manager.
+     * Other types that referenced it (e.g. fields, parameters) will be replaced
+     * with undefined types by Ghidra.
+     *
+     * See the note on {@link #renameStructure} about why this does not run on
+     * the Swing EDT.
+     */
+    private String deleteStructure(String name) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (name == null || name.isEmpty()) return "Structure name is required";
+
+        DataTypeManager dtm = program.getDataTypeManager();
+
+        DataType existing = findDataTypeByNameInAllCategories(dtm, name);
+        if (!(existing instanceof Structure)) {
+            return "Error: '" + name + "' is not a structure";
+        }
+
+        String path = existing.getPathName();
+        int tx = program.startTransaction("Delete structure " + name);
+        boolean success = false;
+        try {
+            boolean removed = dtm.remove(existing);
+            if (removed) {
+                success = true;
+                return "Deleted structure '" + path + "'";
+            }
+            return "Error: data type manager refused to remove '" + path + "'";
+        } catch (Exception e) {
+            Msg.error(this, "Error deleting structure", e);
+            return "Error deleting structure: " + e.getMessage();
+        } finally {
+            program.endTransaction(tx, success);
+        }
+    }
+
+    /**
+     * Register a pointer type for an existing structure.
+     * If pointerName is provided, a named typedef is created (e.g. "PMyStruct" -> "MyStruct *").
+     * Otherwise the bare "MyStruct *" pointer type is added to the data type manager.
+     */
+    private String createStructurePointer(String structName, String pointerName) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (structName == null || structName.isEmpty()) return "Structure name is required";
+
+        StringBuilder result = new StringBuilder();
+        AtomicBoolean success = new AtomicBoolean(false);
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                DataTypeManager dtm = program.getDataTypeManager();
+
+                DataType existing = findDataTypeByNameInAllCategories(dtm, structName);
+                if (!(existing instanceof Structure)) {
+                    result.append("Error: '").append(structName).append("' is not a structure");
+                    return;
+                }
+
+                if (pointerName != null && !pointerName.isEmpty()) {
+                    DataType nameClash = findDataTypeByNameInAllCategories(dtm, pointerName);
+                    if (nameClash != null) {
+                        result.append("Error: a data type named '").append(pointerName)
+                              .append("' already exists at ").append(nameClash.getPathName());
+                        return;
+                    }
+                }
+
+                int tx = program.startTransaction("Create pointer to " + structName);
+                try {
+                    PointerDataType ptr = new PointerDataType(existing);
+                    DataType addedPtr = dtm.addDataType(ptr, DataTypeConflictHandler.DEFAULT_HANDLER);
+
+                    if (pointerName != null && !pointerName.isEmpty()) {
+                        TypedefDataType typedef =
+                            new TypedefDataType(CategoryPath.ROOT, pointerName, addedPtr, dtm);
+                        DataType addedTd = dtm.addDataType(typedef, DataTypeConflictHandler.DEFAULT_HANDLER);
+                        result.append("Created typedef '").append(addedTd.getPathName())
+                              .append("' for ").append(addedPtr.getName());
+                    } else {
+                        result.append("Created pointer type '").append(addedPtr.getPathName())
+                              .append("' for ").append(existing.getName());
+                    }
+                    success.set(true);
+                } catch (Exception e) {
+                    result.append("Error creating structure pointer: ").append(e.getMessage());
+                    Msg.error(this, "Error creating structure pointer", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed to execute create structure pointer on Swing thread: " + e.getMessage();
+        }
+
+        return result.toString();
+    }
+
+    /**
+     * List all Structure data types defined in the program's data type manager.
+     */
+    private String listStructures(int offset, int limit) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        DataTypeManager dtm = program.getDataTypeManager();
+        List<String> names = new ArrayList<>();
+        Iterator<DataType> it = dtm.getAllDataTypes();
+        while (it.hasNext()) {
+            DataType dt = it.next();
+            if (dt instanceof Structure) {
+                names.add(dt.getPathName() + " (size=" + dt.getLength() + ")");
+            }
+        }
+        Collections.sort(names);
+        return paginateList(names, offset, limit);
+    }
+
+    /**
+     * Describe a structure's field layout.
+     */
+    private String getStructure(String name) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (name == null || name.isEmpty()) return "Structure name is required";
+
+        DataTypeManager dtm = program.getDataTypeManager();
+        DataType dt = findDataTypeByNameInAllCategories(dtm, name);
+        if (!(dt instanceof Structure)) {
+            return "Error: '" + name + "' is not a structure";
+        }
+        Structure struct = (Structure) dt;
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(struct.getPathName())
+          .append(" (size=").append(struct.getLength()).append(")\n");
+        for (DataTypeComponent comp : struct.getComponents()) {
+            String fieldName = comp.getFieldName();
+            if (fieldName == null) fieldName = comp.getDefaultFieldName();
+            sb.append(String.format("  +0x%x: %s %s (size=%d)%n",
+                comp.getOffset(),
+                comp.getDataType().getName(),
+                fieldName,
+                comp.getLength()));
+        }
+        return sb.toString();
     }
 
     // ----------------------------------------------------------------------------------

@@ -287,6 +287,171 @@ def list_strings(offset: int = 0, limit: int = 2000, filter: str = None) -> list
         params["filter"] = filter
     return safe_get("strings", params)
 
+@mcp.tool()
+def create_structure(name: str, size: int = 0) -> str:
+    """
+    Create a new structure data type in the program's data type manager.
+
+    Args:
+        name: Name for the new structure (must not collide with an existing type).
+        size: Initial size in bytes. 0 (default) creates an empty structure that
+              grows as fields are appended; a positive value reserves that many
+              bytes up front (additional fields still grow the structure).
+    """
+    return safe_post("create_structure", {"name": name, "size": size})
+
+@mcp.tool()
+def add_structure_field(struct_name: str, field_name: str, field_type: str, offset: int = -1) -> str:
+    """
+    Add a field to an existing structure.
+
+    Args:
+        struct_name: Name of the existing structure to modify.
+        field_name: Field name to assign.
+        field_type: Field type. Accepts built-ins ("int", "uint", ...), existing
+                    data type names ("MyStruct"), and pointer syntax
+                    ("MyStruct *", "void **", or the Windows-style "PMyStruct").
+        offset: Byte offset to insert at. -1 (default) appends to the end.
+    """
+    data = {
+        "struct_name": struct_name,
+        "field_name": field_name,
+        "field_type": field_type,
+    }
+    if offset >= 0:
+        data["offset"] = offset
+    return safe_post("add_structure_field", data)
+
+@mcp.tool()
+def rename_structure(old_name: str, new_name: str) -> str:
+    """
+    Rename an existing structure data type.
+
+    Args:
+        old_name: Current structure name.
+        new_name: New structure name. Must not collide with another data type.
+    """
+    return safe_post("rename_structure", {"old_name": old_name, "new_name": new_name})
+
+@mcp.tool()
+def delete_structure(name: str) -> str:
+    """
+    Delete a structure data type from the program's data type manager.
+
+    References to the structure elsewhere in the program (struct fields, function
+    parameters, local variables) will be replaced with undefined types.
+    """
+    return safe_post("delete_structure", {"name": name})
+
+@mcp.tool()
+def rename_structure_field(struct_name: str, old_field_name: str, new_field_name: str) -> str:
+    """
+    Rename a field in an existing structure.
+
+    Args:
+        struct_name: Name of the existing structure.
+        old_field_name: Current field name. Default-generated names like "field_0x4"
+                        are valid identifiers for unnamed fields.
+        new_field_name: New field name. Must not collide with an existing field name
+                        in the same structure.
+    """
+    return safe_post("rename_structure_field", {
+        "struct_name": struct_name,
+        "old_field_name": old_field_name,
+        "new_field_name": new_field_name,
+    })
+
+@mcp.tool()
+def set_field_type(struct_name: str, field_name: str, new_type: str, length: int = 0) -> str:
+    """
+    Change the data type of a structure field.
+
+    If the new type is larger than the current field, subsequent components in
+    the structure are absorbed; if smaller, the freed bytes become undefined.
+    This is the right tool for collapsing several scalar slots into a single
+    composite field (e.g. "convert four consecutive qwords into one Pubkey").
+
+    Args:
+        struct_name: Existing structure name.
+        field_name: Field whose type should be replaced.
+        new_type: New type. Accepts built-ins, existing data types, and pointer
+                  syntax ("MyType *").
+        length: Explicit byte length override. 0 (default) uses the type's
+                natural length. Required for types with dynamic size.
+    """
+    data = {
+        "struct_name": struct_name,
+        "field_name": field_name,
+        "new_type": new_type,
+    }
+    if length > 0:
+        data["length"] = length
+    return safe_post("set_field_type", data)
+
+@mcp.tool()
+def resize_structure_field(struct_name: str, field_name: str, new_length: int) -> str:
+    """
+    Change a field's length in bytes while preserving its data type.
+
+    Growing absorbs subsequent components; shrinking turns the freed bytes into
+    undefined slots.
+
+    Args:
+        struct_name: Existing structure name.
+        field_name: Field to resize.
+        new_length: New length in bytes (must be > 0).
+    """
+    return safe_post("resize_structure_field", {
+        "struct_name": struct_name,
+        "field_name": field_name,
+        "new_length": new_length,
+    })
+
+@mcp.tool()
+def delete_structure_field(struct_name: str, field_name: str) -> str:
+    """
+    Delete a field from an existing structure.
+
+    Args:
+        struct_name: Name of the existing structure.
+        field_name: Field name to remove. Default-generated names like "field_0x4"
+                    are valid identifiers for unnamed fields.
+    """
+    return safe_post("delete_structure_field", {
+        "struct_name": struct_name,
+        "field_name": field_name,
+    })
+
+@mcp.tool()
+def create_structure_pointer(struct_name: str, pointer_name: str = "") -> str:
+    """
+    Register a pointer type for an existing structure.
+
+    Args:
+        struct_name: Name of the existing structure.
+        pointer_name: Optional name for a typedef pointing at "<struct_name> *"
+                      (e.g. "PMyStruct"). When empty, the bare "<struct_name> *"
+                      pointer type is added to the data type manager.
+    """
+    data = {"struct_name": struct_name}
+    if pointer_name:
+        data["pointer_name"] = pointer_name
+    return safe_post("create_structure_pointer", data)
+
+@mcp.tool()
+def list_structures(offset: int = 0, limit: int = 100) -> list:
+    """
+    List all structure data types defined in the program.
+    """
+    return safe_get("list_structures", {"offset": offset, "limit": limit})
+
+@mcp.tool()
+def get_structure(name: str) -> str:
+    """
+    Get the field layout of a structure by name.
+    """
+    return "\n".join(safe_get("get_structure", {"name": name}))
+
 def main():
     parser = argparse.ArgumentParser(description="MCP server for Ghidra")
     parser.add_argument("--ghidra-server", type=str, default=DEFAULT_GHIDRA_SERVER,
