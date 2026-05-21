@@ -57,7 +57,7 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
-
+  
 @PluginInfo(
     status = PluginStatus.RELEASED,
     packageName = ghidra.app.DeveloperPluginPackage.NAME,
@@ -71,6 +71,8 @@ public class GhidraMCPPlugin extends Plugin {
     private static final String OPTION_CATEGORY_NAME = "GhidraMCP HTTP Server";
     private static final String PORT_OPTION_NAME = "Server Port";
     private static final int DEFAULT_PORT = 8080;
+    private static final String HOST_OPTION_NAME = "Server Host IP/NAME";
+    private static final String DEFAULT_HOST = "127.0.0.1";
 
     public GhidraMCPPlugin(PluginTool tool) {
         super(tool);
@@ -81,6 +83,10 @@ public class GhidraMCPPlugin extends Plugin {
         options.registerOption(PORT_OPTION_NAME, DEFAULT_PORT,
             null, // No help location for now
             "The network port number the embedded HTTP server will listen on. " +
+            "Requires Ghidra restart or plugin reload to take effect after changing.");
+        options.registerOption(HOST_OPTION_NAME, DEFAULT_HOST,
+            null, // No help location for now
+            "The network host name / ip (default is 127.0.0.1 ) the embedded HTTP server will listen on. " +
             "Requires Ghidra restart or plugin reload to take effect after changing.");
 
         try {
@@ -96,6 +102,7 @@ public class GhidraMCPPlugin extends Plugin {
         // Read the configured port
         Options options = tool.getOptions(OPTION_CATEGORY_NAME);
         int port = options.getInt(PORT_OPTION_NAME, DEFAULT_PORT);
+        String host = options.getString(HOST_OPTION_NAME, DEFAULT_HOST);
 
         // Stop existing server if running (e.g., if plugin is reloaded)
         if (server != null) {
@@ -104,7 +111,7 @@ public class GhidraMCPPlugin extends Plugin {
             server = null;
         }
 
-        server = HttpServer.create(new InetSocketAddress(port), 0);
+        server = HttpServer.create(new InetSocketAddress(host,port), 0);
 
         // Each listing endpoint uses offset & limit from query params:
         server.createContext("/methods", exchange -> {
