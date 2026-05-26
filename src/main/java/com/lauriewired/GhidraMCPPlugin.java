@@ -111,31 +111,32 @@ public class GhidraMCPPlugin extends Plugin {
             Map<String, String> qparams = parseQueryParams(exchange);
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit  = parseIntOrDefault(qparams.get("limit"),  100);
-            sendResponse(exchange, getAllFunctionNames(offset, limit));
+            sendResponse(exchange, getAllFunctionNames(qparams.get("program"), offset, limit));
         });
 
         server.createContext("/classes", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit  = parseIntOrDefault(qparams.get("limit"),  100);
-            sendResponse(exchange, getAllClassNames(offset, limit));
+            sendResponse(exchange, getAllClassNames(qparams.get("program"), offset, limit));
         });
 
         server.createContext("/decompile", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
             String name = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-            sendResponse(exchange, decompileFunctionByName(name));
+            sendResponse(exchange, decompileFunctionByName(qparams.get("program"), name));
         });
 
         server.createContext("/renameFunction", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
-            String response = renameFunction(params.get("oldName"), params.get("newName"))
+            String response = renameFunction(params.get("program"), params.get("oldName"), params.get("newName"))
                     ? "Renamed successfully" : "Rename failed";
             sendResponse(exchange, response);
         });
 
         server.createContext("/renameData", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
-            renameDataAtAddress(params.get("address"), params.get("newName"));
+            renameDataAtAddress(params.get("program"), params.get("address"), params.get("newName"));
             sendResponse(exchange, "Rename data attempted");
         });
 
@@ -144,7 +145,7 @@ public class GhidraMCPPlugin extends Plugin {
             String functionName = params.get("functionName");
             String oldName = params.get("oldName");
             String newName = params.get("newName");
-            String result = renameVariableInFunction(functionName, oldName, newName);
+            String result = renameVariableInFunction(params.get("program"), functionName, oldName, newName);
             sendResponse(exchange, result);
         });
 
@@ -152,35 +153,35 @@ public class GhidraMCPPlugin extends Plugin {
             Map<String, String> qparams = parseQueryParams(exchange);
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit  = parseIntOrDefault(qparams.get("limit"),  100);
-            sendResponse(exchange, listSegments(offset, limit));
+            sendResponse(exchange, listSegments(qparams.get("program"), offset, limit));
         });
 
         server.createContext("/imports", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit  = parseIntOrDefault(qparams.get("limit"),  100);
-            sendResponse(exchange, listImports(offset, limit));
+            sendResponse(exchange, listImports(qparams.get("program"), offset, limit));
         });
 
         server.createContext("/exports", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit  = parseIntOrDefault(qparams.get("limit"),  100);
-            sendResponse(exchange, listExports(offset, limit));
+            sendResponse(exchange, listExports(qparams.get("program"), offset, limit));
         });
 
         server.createContext("/namespaces", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit  = parseIntOrDefault(qparams.get("limit"),  100);
-            sendResponse(exchange, listNamespaces(offset, limit));
+            sendResponse(exchange, listNamespaces(qparams.get("program"), offset, limit));
         });
 
         server.createContext("/data", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit  = parseIntOrDefault(qparams.get("limit"),  100);
-            sendResponse(exchange, listDefinedData(offset, limit));
+            sendResponse(exchange, listDefinedData(qparams.get("program"), offset, limit));
         });
 
         server.createContext("/searchFunctions", exchange -> {
@@ -188,7 +189,7 @@ public class GhidraMCPPlugin extends Plugin {
             String searchTerm = qparams.get("query");
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit = parseIntOrDefault(qparams.get("limit"), 100);
-            sendResponse(exchange, searchFunctionsByName(searchTerm, offset, limit));
+            sendResponse(exchange, searchFunctionsByName(qparams.get("program"), searchTerm, offset, limit));
         });
 
         // New API endpoints based on requirements
@@ -196,7 +197,7 @@ public class GhidraMCPPlugin extends Plugin {
         server.createContext("/get_function_by_address", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             String address = qparams.get("address");
-            sendResponse(exchange, getFunctionByAddress(address));
+            sendResponse(exchange, getFunctionByAddress(qparams.get("program"), address));
         });
 
         server.createContext("/get_current_address", exchange -> {
@@ -207,27 +208,39 @@ public class GhidraMCPPlugin extends Plugin {
             sendResponse(exchange, getCurrentFunction());
         });
 
+        server.createContext("/list_open_programs", exchange -> {
+            sendResponse(exchange, listOpenPrograms());
+        });
+
+        server.createContext("/get_current_program", exchange -> {
+            Program program = getCurrentProgram();
+            sendResponse(exchange, program != null
+                ? program.getName() + "\t" + program.getDomainFile().getPathname()
+                : "No program loaded");
+        });
+
         server.createContext("/list_functions", exchange -> {
-            sendResponse(exchange, listFunctions());
+            Map<String, String> qparams = parseQueryParams(exchange);
+            sendResponse(exchange, listFunctions(qparams.get("program")));
         });
 
         server.createContext("/decompile_function", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             String address = qparams.get("address");
-            sendResponse(exchange, decompileFunctionByAddress(address));
+            sendResponse(exchange, decompileFunctionByAddress(qparams.get("program"), address));
         });
 
         server.createContext("/disassemble_function", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             String address = qparams.get("address");
-            sendResponse(exchange, disassembleFunction(address));
+            sendResponse(exchange, disassembleFunction(qparams.get("program"), address));
         });
 
         server.createContext("/set_decompiler_comment", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             String address = params.get("address");
             String comment = params.get("comment");
-            boolean success = setDecompilerComment(address, comment);
+            boolean success = setDecompilerComment(params.get("program"), address, comment);
             sendResponse(exchange, success ? "Comment set successfully" : "Failed to set comment");
         });
 
@@ -235,7 +248,7 @@ public class GhidraMCPPlugin extends Plugin {
             Map<String, String> params = parsePostParams(exchange);
             String address = params.get("address");
             String comment = params.get("comment");
-            boolean success = setDisassemblyComment(address, comment);
+            boolean success = setDisassemblyComment(params.get("program"), address, comment);
             sendResponse(exchange, success ? "Comment set successfully" : "Failed to set comment");
         });
 
@@ -243,7 +256,7 @@ public class GhidraMCPPlugin extends Plugin {
             Map<String, String> params = parsePostParams(exchange);
             String functionAddress = params.get("function_address");
             String newName = params.get("new_name");
-            boolean success = renameFunctionByAddress(functionAddress, newName);
+            boolean success = renameFunctionByAddress(params.get("program"), functionAddress, newName);
             sendResponse(exchange, success ? "Function renamed successfully" : "Failed to rename function");
         });
 
@@ -253,7 +266,7 @@ public class GhidraMCPPlugin extends Plugin {
             String prototype = params.get("prototype");
 
             // Call the set prototype function and get detailed result
-            PrototypeResult result = setFunctionPrototype(functionAddress, prototype);
+            PrototypeResult result = setFunctionPrototype(params.get("program"), functionAddress, prototype);
 
             if (result.isSuccess()) {
                 // Even with successful operations, include any warning messages for debugging
@@ -281,7 +294,7 @@ public class GhidraMCPPlugin extends Plugin {
                       .append(" in function at ").append(functionAddress).append("\n\n");
 
             // Attempt to find the data type in various categories
-            Program program = getCurrentProgram();
+            Program program = getProgramByName(params.get("program"));
             if (program != null) {
                 DataTypeManager dtm = program.getDataTypeManager();
                 DataType directType = findDataTypeByNameInAllCategories(dtm, newType);
@@ -301,7 +314,7 @@ public class GhidraMCPPlugin extends Plugin {
             }
 
             // Try to set the type
-            boolean success = setLocalVariableType(functionAddress, variableName, newType);
+            boolean success = setLocalVariableType(program, functionAddress, variableName, newType);
 
             String successMsg = success ? "Variable type set successfully" : "Failed to set variable type";
             responseMsg.append("\nResult: ").append(successMsg);
@@ -314,7 +327,7 @@ public class GhidraMCPPlugin extends Plugin {
             String address = qparams.get("address");
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit = parseIntOrDefault(qparams.get("limit"), 100);
-            sendResponse(exchange, getXrefsTo(address, offset, limit));
+            sendResponse(exchange, getXrefsTo(qparams.get("program"), address, offset, limit));
         });
 
         server.createContext("/xrefs_from", exchange -> {
@@ -322,7 +335,7 @@ public class GhidraMCPPlugin extends Plugin {
             String address = qparams.get("address");
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit = parseIntOrDefault(qparams.get("limit"), 100);
-            sendResponse(exchange, getXrefsFrom(address, offset, limit));
+            sendResponse(exchange, getXrefsFrom(qparams.get("program"), address, offset, limit));
         });
 
         server.createContext("/function_xrefs", exchange -> {
@@ -330,7 +343,7 @@ public class GhidraMCPPlugin extends Plugin {
             String name = qparams.get("name");
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit = parseIntOrDefault(qparams.get("limit"), 100);
-            sendResponse(exchange, getFunctionXrefs(name, offset, limit));
+            sendResponse(exchange, getFunctionXrefs(qparams.get("program"), name, offset, limit));
         });
 
         server.createContext("/strings", exchange -> {
@@ -338,7 +351,7 @@ public class GhidraMCPPlugin extends Plugin {
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit = parseIntOrDefault(qparams.get("limit"), 100);
             String filter = qparams.get("filter");
-            sendResponse(exchange, listDefinedStrings(offset, limit, filter));
+            sendResponse(exchange, listDefinedStrings(qparams.get("program"), offset, limit, filter));
         });
 
         server.setExecutor(null);
@@ -357,8 +370,8 @@ public class GhidraMCPPlugin extends Plugin {
     // Pagination-aware listing methods
     // ----------------------------------------------------------------------------------
 
-    private String getAllFunctionNames(int offset, int limit) {
-        Program program = getCurrentProgram();
+    private String getAllFunctionNames(String programName, int offset, int limit) {
+        Program program = getProgramByName(programName);
         if (program == null) return "No program loaded";
 
         List<String> names = new ArrayList<>();
@@ -368,8 +381,8 @@ public class GhidraMCPPlugin extends Plugin {
         return paginateList(names, offset, limit);
     }
 
-    private String getAllClassNames(int offset, int limit) {
-        Program program = getCurrentProgram();
+    private String getAllClassNames(String programName, int offset, int limit) {
+        Program program = getProgramByName(programName);
         if (program == null) return "No program loaded";
 
         Set<String> classNames = new HashSet<>();
@@ -385,8 +398,8 @@ public class GhidraMCPPlugin extends Plugin {
         return paginateList(sorted, offset, limit);
     }
 
-    private String listSegments(int offset, int limit) {
-        Program program = getCurrentProgram();
+    private String listSegments(String programName, int offset, int limit) {
+        Program program = getProgramByName(programName);
         if (program == null) return "No program loaded";
 
         List<String> lines = new ArrayList<>();
@@ -396,8 +409,8 @@ public class GhidraMCPPlugin extends Plugin {
         return paginateList(lines, offset, limit);
     }
 
-    private String listImports(int offset, int limit) {
-        Program program = getCurrentProgram();
+    private String listImports(String programName, int offset, int limit) {
+        Program program = getProgramByName(programName);
         if (program == null) return "No program loaded";
 
         List<String> lines = new ArrayList<>();
@@ -407,8 +420,8 @@ public class GhidraMCPPlugin extends Plugin {
         return paginateList(lines, offset, limit);
     }
 
-    private String listExports(int offset, int limit) {
-        Program program = getCurrentProgram();
+    private String listExports(String programName, int offset, int limit) {
+        Program program = getProgramByName(programName);
         if (program == null) return "No program loaded";
 
         SymbolTable table = program.getSymbolTable();
@@ -425,8 +438,8 @@ public class GhidraMCPPlugin extends Plugin {
         return paginateList(lines, offset, limit);
     }
 
-    private String listNamespaces(int offset, int limit) {
-        Program program = getCurrentProgram();
+    private String listNamespaces(String programName, int offset, int limit) {
+        Program program = getProgramByName(programName);
         if (program == null) return "No program loaded";
 
         Set<String> namespaces = new HashSet<>();
@@ -441,8 +454,8 @@ public class GhidraMCPPlugin extends Plugin {
         return paginateList(sorted, offset, limit);
     }
 
-    private String listDefinedData(int offset, int limit) {
-        Program program = getCurrentProgram();
+    private String listDefinedData(String programName, int offset, int limit) {
+        Program program = getProgramByName(programName);
         if (program == null) return "No program loaded";
 
         List<String> lines = new ArrayList<>();
@@ -464,8 +477,8 @@ public class GhidraMCPPlugin extends Plugin {
         return paginateList(lines, offset, limit);
     }
 
-    private String searchFunctionsByName(String searchTerm, int offset, int limit) {
-        Program program = getCurrentProgram();
+    private String searchFunctionsByName(String programName, String searchTerm, int offset, int limit) {
+        Program program = getProgramByName(programName);
         if (program == null) return "No program loaded";
         if (searchTerm == null || searchTerm.isEmpty()) return "Search term is required";
     
@@ -490,8 +503,8 @@ public class GhidraMCPPlugin extends Plugin {
     // Logic for rename, decompile, etc.
     // ----------------------------------------------------------------------------------
 
-    private String decompileFunctionByName(String name) {
-        Program program = getCurrentProgram();
+    private String decompileFunctionByName(String programName, String name) {
+        Program program = getProgramByName(programName);
         if (program == null) return "No program loaded";
         DecompInterface decomp = new DecompInterface();
         decomp.openProgram(program);
@@ -509,8 +522,8 @@ public class GhidraMCPPlugin extends Plugin {
         return "Function not found";
     }
 
-    private boolean renameFunction(String oldName, String newName) {
-        Program program = getCurrentProgram();
+    private boolean renameFunction(String programName, String oldName, String newName) {
+        Program program = getProgramByName(programName);
         if (program == null) return false;
 
         AtomicBoolean successFlag = new AtomicBoolean(false);
@@ -540,8 +553,8 @@ public class GhidraMCPPlugin extends Plugin {
         return successFlag.get();
     }
 
-    private void renameDataAtAddress(String addressStr, String newName) {
-        Program program = getCurrentProgram();
+    private void renameDataAtAddress(String programName, String addressStr, String newName) {
+        Program program = getProgramByName(programName);
         if (program == null) return;
 
         try {
@@ -574,8 +587,8 @@ public class GhidraMCPPlugin extends Plugin {
         }
     }
 
-    private String renameVariableInFunction(String functionName, String oldVarName, String newVarName) {
-        Program program = getCurrentProgram();
+    private String renameVariableInFunction(String programName, String functionName, String oldVarName, String newVarName) {
+        Program program = getProgramByName(programName);
         if (program == null) return "No program loaded";
 
         DecompInterface decomp = new DecompInterface();
@@ -706,8 +719,8 @@ public class GhidraMCPPlugin extends Plugin {
     /**
      * Get function by address
      */
-    private String getFunctionByAddress(String addressStr) {
-        Program program = getCurrentProgram();
+    private String getFunctionByAddress(String programName, String addressStr) {
+        Program program = getProgramByName(programName);
         if (program == null) return "No program loaded";
         if (addressStr == null || addressStr.isEmpty()) return "Address is required";
 
@@ -765,8 +778,8 @@ public class GhidraMCPPlugin extends Plugin {
     /**
      * List all functions in the database
      */
-    private String listFunctions() {
-        Program program = getCurrentProgram();
+    private String listFunctions(String programName) {
+        Program program = getProgramByName(programName);
         if (program == null) return "No program loaded";
 
         StringBuilder result = new StringBuilder();
@@ -794,8 +807,8 @@ public class GhidraMCPPlugin extends Plugin {
     /**
      * Decompile a function at the given address
      */
-    private String decompileFunctionByAddress(String addressStr) {
-        Program program = getCurrentProgram();
+    private String decompileFunctionByAddress(String programName, String addressStr) {
+        Program program = getProgramByName(programName);
         if (program == null) return "No program loaded";
         if (addressStr == null || addressStr.isEmpty()) return "Address is required";
 
@@ -819,8 +832,8 @@ public class GhidraMCPPlugin extends Plugin {
     /**
      * Get assembly code for a function
      */
-    private String disassembleFunction(String addressStr) {
-        Program program = getCurrentProgram();
+    private String disassembleFunction(String programName, String addressStr) {
+        Program program = getProgramByName(programName);
         if (program == null) return "No program loaded";
         if (addressStr == null || addressStr.isEmpty()) return "Address is required";
 
@@ -858,8 +871,8 @@ public class GhidraMCPPlugin extends Plugin {
     /**
      * Set a comment using the specified comment type (PRE_COMMENT or EOL_COMMENT)
      */
-    private boolean setCommentAtAddress(String addressStr, String comment, int commentType, String transactionName) {
-        Program program = getCurrentProgram();
+    private boolean setCommentAtAddress(String programName, String addressStr, String comment, int commentType, String transactionName) {
+        Program program = getProgramByName(programName);
         if (program == null) return false;
         if (addressStr == null || addressStr.isEmpty() || comment == null) return false;
 
@@ -888,15 +901,15 @@ public class GhidraMCPPlugin extends Plugin {
     /**
      * Set a comment for a given address in the function pseudocode
      */
-    private boolean setDecompilerComment(String addressStr, String comment) {
-        return setCommentAtAddress(addressStr, comment, CodeUnit.PRE_COMMENT, "Set decompiler comment");
+    private boolean setDecompilerComment(String programName, String addressStr, String comment) {
+        return setCommentAtAddress(programName, addressStr, comment, CodeUnit.PRE_COMMENT, "Set decompiler comment");
     }
 
     /**
      * Set a comment for a given address in the function disassembly
      */
-    private boolean setDisassemblyComment(String addressStr, String comment) {
-        return setCommentAtAddress(addressStr, comment, CodeUnit.EOL_COMMENT, "Set disassembly comment");
+    private boolean setDisassemblyComment(String programName, String addressStr, String comment) {
+        return setCommentAtAddress(programName, addressStr, comment, CodeUnit.EOL_COMMENT, "Set disassembly comment");
     }
 
     /**
@@ -923,8 +936,8 @@ public class GhidraMCPPlugin extends Plugin {
     /**
      * Rename a function by its address
      */
-    private boolean renameFunctionByAddress(String functionAddrStr, String newName) {
-        Program program = getCurrentProgram();
+    private boolean renameFunctionByAddress(String programName, String functionAddrStr, String newName) {
+        Program program = getProgramByName(programName);
         if (program == null) return false;
         if (functionAddrStr == null || functionAddrStr.isEmpty() || 
             newName == null || newName.isEmpty()) {
@@ -970,9 +983,9 @@ public class GhidraMCPPlugin extends Plugin {
     /**
      * Set a function's prototype with proper error handling using ApplyFunctionSignatureCmd
      */
-    private PrototypeResult setFunctionPrototype(String functionAddrStr, String prototype) {
+    private PrototypeResult setFunctionPrototype(String programName, String functionAddrStr, String prototype) {
         // Input validation
-        Program program = getCurrentProgram();
+        Program program = getProgramByName(programName);
         if (program == null) return new PrototypeResult(false, "No program loaded");
         if (functionAddrStr == null || functionAddrStr.isEmpty()) {
             return new PrototypeResult(false, "Function address is required");
@@ -1101,9 +1114,8 @@ public class GhidraMCPPlugin extends Plugin {
     /**
      * Set a local variable's type using HighFunctionDBUtil.updateDBVariable
      */
-    private boolean setLocalVariableType(String functionAddrStr, String variableName, String newType) {
+    private boolean setLocalVariableType(Program program, String functionAddrStr, String variableName, String newType) {
         // Input validation
-        Program program = getCurrentProgram();
         if (program == null) return false;
         if (functionAddrStr == null || functionAddrStr.isEmpty() || 
             variableName == null || variableName.isEmpty() ||
@@ -1245,8 +1257,8 @@ public class GhidraMCPPlugin extends Plugin {
     /**
      * Get all references to a specific address (xref to)
      */
-    private String getXrefsTo(String addressStr, int offset, int limit) {
-        Program program = getCurrentProgram();
+    private String getXrefsTo(String programName, String addressStr, int offset, int limit) {
+        Program program = getProgramByName(programName);
         if (program == null) return "No program loaded";
         if (addressStr == null || addressStr.isEmpty()) return "Address is required";
 
@@ -1277,8 +1289,8 @@ public class GhidraMCPPlugin extends Plugin {
     /**
      * Get all references from a specific address (xref from)
      */
-    private String getXrefsFrom(String addressStr, int offset, int limit) {
-        Program program = getCurrentProgram();
+    private String getXrefsFrom(String programName, String addressStr, int offset, int limit) {
+        Program program = getProgramByName(programName);
         if (program == null) return "No program loaded";
         if (addressStr == null || addressStr.isEmpty()) return "Address is required";
 
@@ -1316,8 +1328,8 @@ public class GhidraMCPPlugin extends Plugin {
     /**
      * Get all references to a specific function by name
      */
-    private String getFunctionXrefs(String functionName, int offset, int limit) {
-        Program program = getCurrentProgram();
+    private String getFunctionXrefs(String programName, String functionName, int offset, int limit) {
+        Program program = getProgramByName(programName);
         if (program == null) return "No program loaded";
         if (functionName == null || functionName.isEmpty()) return "Function name is required";
 
@@ -1355,8 +1367,8 @@ public class GhidraMCPPlugin extends Plugin {
 /**
  * List all defined strings in the program with their addresses
  */
-    private String listDefinedStrings(int offset, int limit, String filter) {
-        Program program = getCurrentProgram();
+    private String listDefinedStrings(String programName, int offset, int limit, String filter) {
+        Program program = getProgramByName(programName);
         if (program == null) return "No program loaded";
 
         List<String> lines = new ArrayList<>();
@@ -1627,6 +1639,50 @@ public class GhidraMCPPlugin extends Plugin {
     public Program getCurrentProgram() {
         ProgramManager pm = tool.getService(ProgramManager.class);
         return pm != null ? pm.getCurrentProgram() : null;
+    }
+
+    /**
+     * Resolve a program among the tool's open programs by name or domain-file path.
+     * When {@code programName} is null or empty this falls back to the current
+     * (focused) program, preserving the previous single-program behavior.
+     *
+     * @param programName a program name (e.g. "ping"), domain-file name, or full
+     *                    project path (e.g. "/folder/ping"); null/empty for current
+     * @return the matching open Program, or null if none matches
+     */
+    private Program getProgramByName(String programName) {
+        ProgramManager pm = tool.getService(ProgramManager.class);
+        if (pm == null) return null;
+        if (programName == null || programName.isEmpty()) {
+            return pm.getCurrentProgram();
+        }
+        for (Program p : pm.getAllOpenPrograms()) {
+            if (p.getName().equals(programName)
+                    || p.getDomainFile().getName().equals(programName)
+                    || p.getDomainFile().getPathname().equals(programName)) {
+                return p;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * List every program currently open in the tool, marking the focused one.
+     * Each line is "name\tpath[\t(current)]".
+     */
+    private String listOpenPrograms() {
+        ProgramManager pm = tool.getService(ProgramManager.class);
+        if (pm == null) return "Program manager not available";
+
+        Program current = pm.getCurrentProgram();
+        List<String> lines = new ArrayList<>();
+        for (Program p : pm.getAllOpenPrograms()) {
+            String marker = (p == current) ? "\t(current)" : "";
+            lines.add(String.format("%s\t%s%s",
+                p.getName(), p.getDomainFile().getPathname(), marker));
+        }
+        if (lines.isEmpty()) return "No programs open";
+        return String.join("\n", lines);
     }
 
     private void sendResponse(HttpExchange exchange, String response) throws IOException {
