@@ -2,7 +2,7 @@ name: Build with Maven
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "ghidra-12.1.2-update" ]
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
