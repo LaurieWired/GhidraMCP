@@ -2,16 +2,17 @@ name: Build with Maven
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "ghidra-12.1.2-update" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      GHIDRA_VERSION: 11.3.2
-      GHIDRA_DATE: 20250415
+      GHIDRA_VERSION: 12.1.2
+      GHIDRA_DATE: 20260605
       GHIDRA_LIBS: >-
         Features/Base/lib/Base.jar
         Features/Decompiler/lib/Decompiler.jar
