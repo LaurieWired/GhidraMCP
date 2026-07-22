@@ -1,17 +1,15 @@
 name: Build with Maven
 
 on:
-  push:
-    branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      GHIDRA_VERSION: 11.3.2
-      GHIDRA_DATE: 20250415
+      GHIDRA_VERSION: 12.1.2
       GHIDRA_LIBS: >-
         Features/Base/lib/Base.jar
         Features/Decompiler/lib/Decompiler.jar
@@ -33,15 +31,18 @@ jobs:
 
     - name: Download Ghidra
       run: |
-        wget --no-verbose -O ghidra.zip https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${{ env.GHIDRA_VERSION }}_build/ghidra_${{ env.GHIDRA_VERSION }}_PUBLIC_${{ env.GHIDRA_DATE }}.zip
+        DOWNLOAD_URL=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/NationalSecurityAgency/ghidra/releases/tags/Ghidra_${{ env.GHIDRA_VERSION }}_build | jq -r '.assets[] | select(.name | startswith("ghidra_") and endswith(".zip")) | .browser_download_url' | head -n 1)
+        echo "Downloading Ghidra from: $DOWNLOAD_URL"
+        wget --no-verbose -O ghidra.zip "$DOWNLOAD_URL"
         7z x -bd ghidra.zip
 
     - name: Copy Ghidra libs
       run: |
         mkdir -p ./lib
+        GHIDRA_DIR=$(ls -d ghidra_${{ env.GHIDRA_VERSION }}_PUBLIC*)
         for libfile in ${{ env.GHIDRA_LIBS }}
           do echo "Copying ${libfile} to lib/"
-          cp ghidra_${{ env.GHIDRA_VERSION }}_PUBLIC/Ghidra/${libfile} ./lib/
+          cp ${GHIDRA_DIR}/Ghidra/${libfile} ./lib/
         done
 
     - name: Build with Maven
@@ -49,9 +50,12 @@ jobs:
 
     - name: Assemble release directory
       run: |
+        mkdir -p release_bundle
+        cp target/GhidraMCP.zip release_bundle/
+        cp bridge_mcp_ghidra.py release_bundle/
+        cp requirements.txt release_bundle/
         mkdir release
-        cp target/GhidraMCP-*-SNAPSHOT.zip release/
-        cp bridge_mcp_ghidra.py release/
+        (cd release_bundle && zip -r ../release/GhidraMCP-${{ env.GHIDRA_VERSION }}.zip .)
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
