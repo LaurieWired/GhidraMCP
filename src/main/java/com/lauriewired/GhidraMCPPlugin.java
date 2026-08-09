@@ -104,7 +104,9 @@ public class GhidraMCPPlugin extends Plugin {
             server = null;
         }
 
-        server = HttpServer.create(new InetSocketAddress(port), 0);
+        // Bind to loopback only: this server is paired with a local Python bridge
+        // and must not be reachable from other hosts on the network.
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
 
         // Each listing endpoint uses offset & limit from query params:
         server.createContext("/methods", exchange -> {

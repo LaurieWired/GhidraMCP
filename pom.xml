@@ -10,6 +10,12 @@
   <name>GhidraMCP</name>
   <url>http://maven.apache.org</url>
 
+  <properties>
+    <!-- Matches the JDK used in .github/workflows/build.yml and Ghidra's own JDK requirement -->
+    <maven.compiler.source>21</maven.compiler.source>
+    <maven.compiler.target>21</maven.compiler.target>
+  </properties>
+
   <dependencies>
     <!-- Ghidra JARs as system-scoped dependencies -->
     <dependency>
