@@ -427,6 +427,113 @@ def search_memory(pattern: str, start: str = None, end: str = None, max_results:
         params["end"] = end
     return "\n".join(safe_get("search_memory", params))
 
+@mcp.tool()
+def list_data_types(category: str = None, offset: int = 0, limit: int = 100) -> list:
+    """
+    List data types in the program, optionally filtered by category path.
+
+    Args:
+        category: Category path to list (e.g. "/DWARF", "/Win32"). Omit for root.
+        offset: Pagination offset (default: 0)
+        limit: Maximum number of results (default: 100)
+    """
+    params = {"offset": offset, "limit": limit}
+    if category:
+        params["category"] = category
+    return safe_get("list_data_types", params)
+
+
+@mcp.tool()
+def get_data_type(name: str) -> str:
+    """
+    Get detailed info about a data type (struct fields, enum members, size, etc.)
+
+    Args:
+        name: Name of the data type to look up.
+    """
+    return "\n".join(safe_get("get_data_type", {"name": name}))
+
+
+@mcp.tool()
+def create_struct(name: str, category: str = None, size: int = 0) -> str:
+    """
+    Create a new struct data type.
+
+    Args:
+        name: Name for the struct.
+        category: Category path (e.g. "/MyTypes"). Defaults to root.
+        size: Initial size in bytes (0 for growable).
+    """
+    data = {"name": name, "size": str(size)}
+    if category:
+        data["category"] = category
+    return safe_post("create_struct", data)
+
+
+@mcp.tool()
+def add_struct_field(struct_name: str, field_name: str, field_type: str,
+                     offset: int = -1, comment: str = None) -> str:
+    """
+    Add a field to an existing struct.
+
+    Args:
+        struct_name: Name of the struct to modify.
+        field_name: Name for the new field.
+        field_type: Data type of the field (e.g. "int", "char[16]", "pointer").
+        offset: Byte offset within struct (-1 to append).
+        comment: Optional comment for the field.
+    """
+    data = {"struct_name": struct_name, "field_name": field_name, "field_type": field_type}
+    if offset >= 0:
+        data["offset"] = str(offset)
+    if comment:
+        data["comment"] = comment
+    return safe_post("add_struct_field", data)
+
+
+@mcp.tool()
+def create_enum(name: str, category: str = None, size: int = 4) -> str:
+    """
+    Create a new enum data type.
+
+    Args:
+        name: Name for the enum.
+        category: Category path (e.g. "/MyTypes"). Defaults to root.
+        size: Size in bytes (default: 4).
+    """
+    data = {"name": name, "size": str(size)}
+    if category:
+        data["category"] = category
+    return safe_post("create_enum", data)
+
+
+@mcp.tool()
+def add_enum_member(enum_name: str, member_name: str, value: str) -> str:
+    """
+    Add a member to an existing enum.
+
+    Args:
+        enum_name: Name of the enum to modify.
+        member_name: Name of the new member.
+        value: Integer value (decimal or hex like "0x10").
+    """
+    return safe_post("add_enum_member", {
+        "enum_name": enum_name, "member_name": member_name, "value": value
+    })
+
+
+@mcp.tool()
+def apply_data_type(address: str, type_name: str) -> str:
+    """
+    Apply a data type at a given address in the listing.
+
+    Args:
+        address: Address to apply the type at (e.g. "0x00401000").
+        type_name: Name of the data type to apply.
+    """
+    return safe_post("apply_data_type", {"address": address, "type_name": type_name})
+
+
 
 def main():
     parser = argparse.ArgumentParser(description="MCP server for Ghidra")

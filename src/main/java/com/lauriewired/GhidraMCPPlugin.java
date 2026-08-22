@@ -57,6 +57,10 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import ghidra.program.model.data.StructureDataType;
+import ghidra.program.model.data.EnumDataType;
+import ghidra.program.model.data.CategoryPath;
+import ghidra.program.model.data.Category;
 
 @PluginInfo(
     status = PluginStatus.RELEASED,
@@ -349,6 +353,62 @@ public class GhidraMCPPlugin extends Plugin {
             String endAddr = qparams.get("end");
             int maxResults = parseIntOrDefault(qparams.get("max"), 100);
             sendResponse(exchange, searchMemory(pattern, startAddr, endAddr, maxResults));
+        });
+
+        // ── Data type management ─────────────────────────────────────────
+        server.createContext("/list_data_types", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String category = qparams.get("category");
+            int offset = parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = parseIntOrDefault(qparams.get("limit"), 100);
+            sendResponse(exchange, listDataTypes(category, offset, limit));
+        });
+
+        server.createContext("/get_data_type", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String name = qparams.get("name");
+            sendResponse(exchange, getDataTypeInfo(name));
+        });
+
+        server.createContext("/create_struct", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String name = params.get("name");
+            String category = params.get("category");
+            int size = parseIntOrDefault(params.get("size"), 0);
+            sendResponse(exchange, createStruct(name, category, size));
+        });
+
+        server.createContext("/add_struct_field", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String structName = params.get("struct_name");
+            String fieldName = params.get("field_name");
+            String fieldType = params.get("field_type");
+            int fieldOffset = parseIntOrDefault(params.get("offset"), -1);
+            String comment = params.get("comment");
+            sendResponse(exchange, addStructField(structName, fieldName, fieldType, fieldOffset, comment));
+        });
+
+        server.createContext("/create_enum", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String name = params.get("name");
+            String category = params.get("category");
+            int size = parseIntOrDefault(params.get("size"), 4);
+            sendResponse(exchange, createEnum(name, category, size));
+        });
+
+        server.createContext("/add_enum_member", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String enumName = params.get("enum_name");
+            String memberName = params.get("member_name");
+            String valueStr = params.get("value");
+            sendResponse(exchange, addEnumMember(enumName, memberName, valueStr));
+        });
+
+        server.createContext("/apply_data_type", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String address = params.get("address");
+            String typeName = params.get("type_name");
+            sendResponse(exchange, applyDataTypeAtAddress(address, typeName));
         });
 
         server.setExecutor(null);
@@ -1729,6 +1789,290 @@ public class GhidraMCPPlugin extends Plugin {
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);
         }
+    }
+
+    // ----------------------------------------------------------------------------------
+    // Data type management: structs, enums, listing, applying
+    // ----------------------------------------------------------------------------------
+
+    private String listDataTypes(String category, int offset, int limit) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        DataTypeManager dtm = program.getDataTypeManager();
+        List<String> lines = new ArrayList<>();
+
+        if (category != null && !category.isEmpty()) {
+            CategoryPath catPath = new CategoryPath(category);
+            Category cat = dtm.getCategory(catPath);
+            if (cat == null) return "Category not found: " + category;
+            for (DataType dt : cat.getDataTypes()) {
+                lines.add(String.format("%s  [%s]  (%d bytes)", dt.getPathName(), dt.getClass().getSimpleName(), dt.getLength()));
+            }
+            for (Category sub : cat.getCategories()) {
+                lines.add(String.format("[category] %s", sub.getCategoryPath()));
+            }
+        } else {
+            // root-level: subcategories + root types
+            Category root = dtm.getRootCategory();
+            for (Category sub : root.getCategories()) {
+                lines.add(String.format("[category] %s", sub.getCategoryPath()));
+            }
+            for (DataType dt : root.getDataTypes()) {
+                lines.add(String.format("%s  [%s]  (%d bytes)", dt.getPathName(), dt.getClass().getSimpleName(), dt.getLength()));
+            }
+        }
+
+        Collections.sort(lines);
+        return paginateList(lines, offset, limit);
+    }
+
+    private String getDataTypeInfo(String typeName) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (typeName == null || typeName.isEmpty()) return "Type name is required";
+
+        DataTypeManager dtm = program.getDataTypeManager();
+        DataType dt = findDataTypeByNameInAllCategories(dtm, typeName);
+        if (dt == null) return "Data type not found: " + typeName;
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("Name: %s\nPath: %s\nSize: %d bytes\nType: %s\n",
+            dt.getName(), dt.getPathName(), dt.getLength(), dt.getClass().getSimpleName()));
+
+        if (dt instanceof ghidra.program.model.data.Structure) {
+            ghidra.program.model.data.Structure struct = (ghidra.program.model.data.Structure) dt;
+            sb.append(String.format("Alignment: %d\nNum fields: %d\n\nFields:\n",
+                struct.getAlignment(), struct.getNumComponents()));
+            for (ghidra.program.model.data.DataTypeComponent comp : struct.getComponents()) {
+                String fname;
+                if (comp.getFieldName() != null) {
+                    fname = comp.getFieldName();
+                } else {
+                    fname = "(unnamed)";
+                }
+                String commentSuffix;
+                if (comp.getComment() != null) {
+                    commentSuffix = "  // " + comp.getComment();
+                } else {
+                    commentSuffix = "";
+                }
+                sb.append(String.format("  +0x%X  %s  %s%s\n",
+                    comp.getOffset(), comp.getDataType().getName(), fname, commentSuffix));
+            }
+        } else if (dt instanceof ghidra.program.model.data.Enum) {
+            ghidra.program.model.data.Enum enumDt = (ghidra.program.model.data.Enum) dt;
+            sb.append(String.format("Num members: %d\n\nMembers:\n", enumDt.getCount()));
+            for (String memberName : enumDt.getNames()) {
+                sb.append(String.format("  %s = 0x%X\n", memberName, enumDt.getValue(memberName)));
+            }
+        }
+
+        return sb.toString();
+    }
+
+    private String createStruct(String name, String categoryStr, int size) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (name == null || name.isEmpty()) return "Struct name is required";
+
+        AtomicBoolean success = new AtomicBoolean(false);
+        StringBuilder result = new StringBuilder();
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Create struct " + name);
+                try {
+                    DataTypeManager dtm = program.getDataTypeManager();
+                    CategoryPath catPath;
+                    if (categoryStr != null && !categoryStr.isEmpty()) {
+                        catPath = new CategoryPath(categoryStr);
+                    } else {
+                        catPath = CategoryPath.ROOT;
+                    }
+
+                    StructureDataType struct = new StructureDataType(catPath, name, size, dtm);
+                    DataType resolved = dtm.addDataType(struct, ghidra.program.model.data.DataTypeConflictHandler.REPLACE_HANDLER);
+                    result.append("Created struct: ").append(resolved.getPathName());
+                    success.set(true);
+                } catch (Exception e) {
+                    result.append("Error creating struct: ").append(e.getMessage());
+                    Msg.error(this, "Error creating struct", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed on Swing thread: " + e.getMessage();
+        }
+        return result.toString();
+    }
+
+    private String addStructField(String structName, String fieldName, String fieldType, int fieldOffset, String comment) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (structName == null || fieldType == null) return "struct_name and field_type are required";
+
+        AtomicBoolean success = new AtomicBoolean(false);
+        StringBuilder result = new StringBuilder();
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Add field to struct " + structName);
+                try {
+                    DataTypeManager dtm = program.getDataTypeManager();
+                    DataType dt = findDataTypeByNameInAllCategories(dtm, structName);
+                    if (dt == null || !(dt instanceof ghidra.program.model.data.Structure)) {
+                        result.append("Struct not found: ").append(structName);
+                        return;
+                    }
+                    ghidra.program.model.data.Structure struct = (ghidra.program.model.data.Structure) dt;
+                    DataType fType = resolveDataType(dtm, fieldType);
+                    if (fType == null) {
+                        result.append("Field type not found: ").append(fieldType);
+                        return;
+                    }
+
+                    String effectiveName;
+                    if (fieldName != null) {
+                        effectiveName = fieldName;
+                    } else {
+                        effectiveName = "";
+                    }
+
+                    if (fieldOffset >= 0) {
+                        struct.replaceAtOffset(fieldOffset, fType, fType.getLength(), effectiveName, comment);
+                    } else {
+                        struct.add(fType, effectiveName, comment);
+                    }
+                    result.append("Added field ").append(fieldName).append(" (").append(fieldType)
+                          .append(") to ").append(structName);
+                    success.set(true);
+                } catch (Exception e) {
+                    result.append("Error adding field: ").append(e.getMessage());
+                    Msg.error(this, "Error adding struct field", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed on Swing thread: " + e.getMessage();
+        }
+        return result.toString();
+    }
+
+    private String createEnum(String name, String categoryStr, int size) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (name == null || name.isEmpty()) return "Enum name is required";
+
+        AtomicBoolean success = new AtomicBoolean(false);
+        StringBuilder result = new StringBuilder();
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Create enum " + name);
+                try {
+                    DataTypeManager dtm = program.getDataTypeManager();
+                    CategoryPath catPath;
+                    if (categoryStr != null && !categoryStr.isEmpty()) {
+                        catPath = new CategoryPath(categoryStr);
+                    } else {
+                        catPath = CategoryPath.ROOT;
+                    }
+
+                    EnumDataType enumDt = new EnumDataType(catPath, name, size, dtm);
+                    DataType resolved = dtm.addDataType(enumDt, ghidra.program.model.data.DataTypeConflictHandler.REPLACE_HANDLER);
+                    result.append("Created enum: ").append(resolved.getPathName());
+                    success.set(true);
+                } catch (Exception e) {
+                    result.append("Error creating enum: ").append(e.getMessage());
+                    Msg.error(this, "Error creating enum", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed on Swing thread: " + e.getMessage();
+        }
+        return result.toString();
+    }
+
+    private String addEnumMember(String enumName, String memberName, String valueStr) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (enumName == null || memberName == null || valueStr == null)
+            return "enum_name, member_name, and value are required";
+
+        AtomicBoolean success = new AtomicBoolean(false);
+        StringBuilder result = new StringBuilder();
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Add member to enum " + enumName);
+                try {
+                    DataTypeManager dtm = program.getDataTypeManager();
+                    DataType dt = findDataTypeByNameInAllCategories(dtm, enumName);
+                    if (dt == null || !(dt instanceof ghidra.program.model.data.Enum)) {
+                        result.append("Enum not found: ").append(enumName);
+                        return;
+                    }
+                    ghidra.program.model.data.Enum enumDt = (ghidra.program.model.data.Enum) dt;
+                    long value = Long.decode(valueStr);
+                    enumDt.add(memberName, value);
+                    result.append("Added ").append(memberName).append(" = ").append(valueStr)
+                          .append(" to ").append(enumName);
+                    success.set(true);
+                } catch (Exception e) {
+                    result.append("Error adding enum member: ").append(e.getMessage());
+                    Msg.error(this, "Error adding enum member", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed on Swing thread: " + e.getMessage();
+        }
+        return result.toString();
+    }
+
+    private String applyDataTypeAtAddress(String addressStr, String typeName) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || typeName == null) return "address and type_name are required";
+
+        AtomicBoolean success = new AtomicBoolean(false);
+        StringBuilder result = new StringBuilder();
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Apply data type at " + addressStr);
+                try {
+                    DataTypeManager dtm = program.getDataTypeManager();
+                    Address addr = program.getAddressFactory().getAddress(addressStr);
+                    DataType dt = findDataTypeByNameInAllCategories(dtm, typeName);
+                    if (dt == null) {
+                        dt = resolveDataType(dtm, typeName);
+                    }
+                    if (dt == null) {
+                        result.append("Data type not found: ").append(typeName);
+                        return;
+                    }
+                    program.getListing().clearCodeUnits(addr, addr.add(dt.getLength() - 1), false);
+                    program.getListing().createData(addr, dt);
+                    result.append("Applied ").append(dt.getPathName()).append(" at ").append(addressStr);
+                    success.set(true);
+                } catch (Exception e) {
+                    result.append("Error applying data type: ").append(e.getMessage());
+                    Msg.error(this, "Error applying data type", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed on Swing thread: " + e.getMessage();
+        }
+        return result.toString();
     }
 
     @Override
