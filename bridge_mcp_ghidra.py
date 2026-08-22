@@ -534,6 +534,42 @@ def apply_data_type(address: str, type_name: str) -> str:
     return safe_post("apply_data_type", {"address": address, "type_name": type_name})
 
 
+@mcp.tool()
+def get_call_graph(name: str, depth: int = 3) -> str:
+    """
+    Get the call graph for a function — both callers and callees.
+
+    Args:
+        name: Function name.
+        depth: How many levels deep to traverse (default: 3).
+    """
+    return "\n".join(safe_get("get_call_graph", {"name": name, "depth": depth}))
+
+
+@mcp.tool()
+def get_callers(name: str, depth: int = 1) -> str:
+    """
+    Get functions that call the named function (xrefs-to, call-type only).
+
+    Args:
+        name: Function name.
+        depth: How many levels up to traverse (default: 1).
+    """
+    return "\n".join(safe_get("get_callers", {"name": name, "depth": depth}))
+
+
+@mcp.tool()
+def get_callees(name: str, depth: int = 1) -> str:
+    """
+    Get functions called by the named function.
+
+    Args:
+        name: Function name.
+        depth: How many levels down to traverse (default: 1).
+    """
+    return "\n".join(safe_get("get_callees", {"name": name, "depth": depth}))
+
+
 
 def main():
     parser = argparse.ArgumentParser(description="MCP server for Ghidra")

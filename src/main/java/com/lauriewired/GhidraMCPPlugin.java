@@ -411,6 +411,28 @@ public class GhidraMCPPlugin extends Plugin {
             sendResponse(exchange, applyDataTypeAtAddress(address, typeName));
         });
 
+        // ── Call graph / CFG ─────────────────────────────────────────────
+        server.createContext("/get_call_graph", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String name = qparams.get("name");
+            int depth = parseIntOrDefault(qparams.get("depth"), 3);
+            sendResponse(exchange, getCallGraph(name, depth));
+        });
+
+        server.createContext("/get_callers", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String name = qparams.get("name");
+            int depth = parseIntOrDefault(qparams.get("depth"), 1);
+            sendResponse(exchange, getCallers(name, depth));
+        });
+
+        server.createContext("/get_callees", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String name = qparams.get("name");
+            int depth = parseIntOrDefault(qparams.get("depth"), 1);
+            sendResponse(exchange, getCallees(name, depth));
+        });
+
         server.setExecutor(null);
         new Thread(() -> {
             try {
@@ -2073,6 +2095,117 @@ public class GhidraMCPPlugin extends Plugin {
             return "Failed on Swing thread: " + e.getMessage();
         }
         return result.toString();
+    }
+
+    // ----------------------------------------------------------------------------------
+    // Call graph: callers, callees, and combined call graph
+    // ----------------------------------------------------------------------------------
+
+    private String getCallGraph(String functionName, int maxDepth) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (functionName == null || functionName.isEmpty()) return "Function name is required";
+
+        Function root = findFunctionByName(program, functionName);
+        if (root == null) return "Function not found: " + functionName;
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("Call graph for: ").append(functionName).append(" @ ").append(root.getEntryPoint()).append("\n\n");
+
+        sb.append("=== CALLERS (who calls this) ===\n");
+        Set<String> visited = new HashSet<>();
+        buildCallerTree(program, root, 0, maxDepth, sb, visited);
+
+        sb.append("\n=== CALLEES (what this calls) ===\n");
+        visited.clear();
+        buildCalleeTree(program, root, 0, maxDepth, sb, visited);
+
+        return sb.toString();
+    }
+
+    private String getCallers(String functionName, int maxDepth) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (functionName == null || functionName.isEmpty()) return "Function name is required";
+
+        Function root = findFunctionByName(program, functionName);
+        if (root == null) return "Function not found: " + functionName;
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("Callers of: ").append(functionName).append("\n");
+        Set<String> visited = new HashSet<>();
+        buildCallerTree(program, root, 0, maxDepth, sb, visited);
+        return sb.toString();
+    }
+
+    private String getCallees(String functionName, int maxDepth) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (functionName == null || functionName.isEmpty()) return "Function name is required";
+
+        Function root = findFunctionByName(program, functionName);
+        if (root == null) return "Function not found: " + functionName;
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("Callees of: ").append(functionName).append("\n");
+        Set<String> visited = new HashSet<>();
+        buildCalleeTree(program, root, 0, maxDepth, sb, visited);
+        return sb.toString();
+    }
+
+    private void buildCallerTree(Program program, Function func, int depth, int maxDepth,
+                                  StringBuilder sb, Set<String> visited) {
+        if (depth >= maxDepth) return;
+        String key = func.getEntryPoint().toString();
+        if (visited.contains(key)) {
+            sb.append("  ".repeat(depth + 1)).append("(recursive: ").append(func.getName()).append(")\n");
+            return;
+        }
+        visited.add(key);
+
+        ReferenceManager refMgr = program.getReferenceManager();
+        ReferenceIterator refs = refMgr.getReferencesTo(func.getEntryPoint());
+        Set<Function> callers = new LinkedHashSet<>();
+        while (refs.hasNext()) {
+            Reference ref = refs.next();
+            if (ref.getReferenceType().isCall()) {
+                Function caller = program.getFunctionManager().getFunctionContaining(ref.getFromAddress());
+                if (caller != null && !caller.equals(func)) {
+                    callers.add(caller);
+                }
+            }
+        }
+
+        for (Function caller : callers) {
+            sb.append("  ".repeat(depth + 1)).append(caller.getName())
+              .append(" @ ").append(caller.getEntryPoint()).append("\n");
+            buildCallerTree(program, caller, depth + 1, maxDepth, sb, visited);
+        }
+    }
+
+    private void buildCalleeTree(Program program, Function func, int depth, int maxDepth,
+                                  StringBuilder sb, Set<String> visited) {
+        if (depth >= maxDepth) return;
+        String key = func.getEntryPoint().toString();
+        if (visited.contains(key)) {
+            sb.append("  ".repeat(depth + 1)).append("(recursive: ").append(func.getName()).append(")\n");
+            return;
+        }
+        visited.add(key);
+
+        Set<Function> callees = func.getCalledFunctions(new ConsoleTaskMonitor());
+        for (Function callee : callees) {
+            sb.append("  ".repeat(depth + 1)).append(callee.getName())
+              .append(" @ ").append(callee.getEntryPoint()).append("\n");
+            buildCalleeTree(program, callee, depth + 1, maxDepth, sb, visited);
+        }
+    }
+
+    private Function findFunctionByName(Program program, String name) {
+        for (Function f : program.getFunctionManager().getFunctions(true)) {
+            if (f.getName().equals(name)) return f;
+        }
+        return null;
     }
 
     @Override
