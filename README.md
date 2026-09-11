@@ -28,6 +28,16 @@ MCP Server + Ghidra Plugin
 - Python3
 - MCP [SDK](https://github.com/modelcontextprotocol/python-sdk)
 
+## Ghidra 12.x Compatibility
+
+The latest release (`GhidraMCP-1-4.zip`) declares `version=11.3.2` in `extension.properties`. Ghidra 12.x enforces a strict version check and will reject the extension with:
+
+```
+Extension version mismatch. Name: GhidraMCP Extension version: 11.3.2. Ghidra version: 12.x.x. Did not install
+```
+
+To use GhidraMCP with Ghidra 12.x, build from source against your local Ghidra installation (see [Building from Source](#building-from-source)). When updating `extension.properties`, note that **both** the `version` field and the `ghidraVersion` field must be changed to match your Ghidra version. The rejection message cites `version`, which makes `ghidraVersion` appear to be the only field that needs updating, but both are required.
+
 ## Ghidra
 First, download the latest [release](https://github.com/LaurieWired/GhidraMCP/releases) from this repository. This contains the Ghidra plugin and Python MCP client. Then, you can directly import the plugin into Ghidra.
 
@@ -38,6 +48,8 @@ First, download the latest [release](https://github.com/LaurieWired/GhidraMCP/re
 5. Restart Ghidra
 6. Make sure the GhidraMCPPlugin is enabled in `File` -> `Configure` -> `Developer`
 7. *Optional*: Configure the port in Ghidra with `Edit` -> `Tool Options` -> `GhidraMCP HTTP Server`
+
+> **Port conflict**: Ghidra defaults to port `8080`. If another service (e.g. Burp Suite) already occupies that port, the HTTP server will silently fail to start. Change the port via `Edit` -> `Tool Options` -> `GhidraMCP` -> `Server Port`, and update your MCP client config to match.
 
 Video Installation Guide:
 
@@ -99,6 +111,9 @@ Another MCP client that supports multiple models on the backend is [5ire](https:
 3. Command: `python /ABSOLUTE_PATH_TO/bridge_mcp_ghidra.py`
 
 # Building from Source
+
+**Before building**, update `src/main/resources/extension.properties` to match your installed Ghidra version — both the `version` and `ghidraVersion` fields must match (e.g. `12.0.4`).
+
 1. Copy the following files from your Ghidra directory to this project's `lib/` directory:
 - `Ghidra/Features/Base/lib/Base.jar`
 - `Ghidra/Features/Decompiler/lib/Decompiler.jar`
@@ -108,6 +123,7 @@ Another MCP client that supports multiple models on the backend is [5ire](https:
 - `Ghidra/Framework/SoftwareModeling/lib/SoftwareModeling.jar`
 - `Ghidra/Framework/Utility/lib/Utility.jar`
 - `Ghidra/Framework/Gui/lib/Gui.jar`
+
 2. Build with Maven by running:
 
 `mvn clean package assembly:single`
@@ -117,3 +133,23 @@ The generated zip file includes the built Ghidra plugin and its resources. These
 - lib/GhidraMCP.jar
 - extensions.properties
 - Module.manifest
+
+### Building without Maven
+
+If Maven is unavailable, you can build directly with `javac` and `jar` (JDK required):
+
+```bash
+# Compile
+javac -cp "lib/*" -d target/classes src/main/java/com/lauriewired/GhidraMCPPlugin.java
+
+# Package
+jar --create --file target/GhidraMCP.jar \
+    --manifest src/main/resources/META-INF/MANIFEST.MF \
+    -C target/classes .
+
+# Assemble the extension zip (must include explicit directory entries)
+# Add GhidraMCP/, GhidraMCP/lib/, then the three files:
+#   GhidraMCP/lib/GhidraMCP.jar
+#   GhidraMCP/extension.properties
+#   GhidraMCP/Module.manifest
+```
