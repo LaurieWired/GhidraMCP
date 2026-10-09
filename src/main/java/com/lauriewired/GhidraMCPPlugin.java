@@ -494,19 +494,23 @@ public class GhidraMCPPlugin extends Plugin {
         Program program = getCurrentProgram();
         if (program == null) return "No program loaded";
         DecompInterface decomp = new DecompInterface();
-        decomp.openProgram(program);
-        for (Function func : program.getFunctionManager().getFunctions(true)) {
-            if (func.getName().equals(name)) {
-                DecompileResults result =
-                    decomp.decompileFunction(func, 30, new ConsoleTaskMonitor());
-                if (result != null && result.decompileCompleted()) {
-                    return result.getDecompiledFunction().getC();
-                } else {
-                    return "Decompilation failed";
+        try {
+            decomp.openProgram(program);
+            for (Function func : program.getFunctionManager().getFunctions(true)) {
+                if (func.getName().equals(name)) {
+                    DecompileResults result =
+                        decomp.decompileFunction(func, 30, new ConsoleTaskMonitor());
+                    if (result != null && result.decompileCompleted()) {
+                        return result.getDecompiledFunction().getC();
+                    } else {
+                        return "Decompilation failed";
+                    }
                 }
             }
+            return "Function not found";
+        } finally {
+            decomp.dispose();
         }
-        return "Function not found";
     }
 
     private boolean renameFunction(String oldName, String newName) {
@@ -578,9 +582,6 @@ public class GhidraMCPPlugin extends Plugin {
         Program program = getCurrentProgram();
         if (program == null) return "No program loaded";
 
-        DecompInterface decomp = new DecompInterface();
-        decomp.openProgram(program);
-
         Function func = null;
         for (Function f : program.getFunctionManager().getFunctions(true)) {
             if (f.getName().equals(functionName)) {
@@ -593,7 +594,14 @@ public class GhidraMCPPlugin extends Plugin {
             return "Function not found";
         }
 
-        DecompileResults result = decomp.decompileFunction(func, 30, new ConsoleTaskMonitor());
+        DecompInterface decomp = new DecompInterface();
+        DecompileResults result;
+        try {
+            decomp.openProgram(program);
+            result = decomp.decompileFunction(func, 30, new ConsoleTaskMonitor());
+        } finally {
+            decomp.dispose();
+        }
         if (result == null || !result.decompileCompleted()) {
             return "Decompilation failed";
         }
@@ -805,12 +813,16 @@ public class GhidraMCPPlugin extends Plugin {
             if (func == null) return "No function found at or containing address " + addressStr;
 
             DecompInterface decomp = new DecompInterface();
-            decomp.openProgram(program);
-            DecompileResults result = decomp.decompileFunction(func, 30, new ConsoleTaskMonitor());
+            try {
+                decomp.openProgram(program);
+                DecompileResults result = decomp.decompileFunction(func, 30, new ConsoleTaskMonitor());
 
-            return (result != null && result.decompileCompleted()) 
-                ? result.getDecompiledFunction().getC() 
-                : "Decompilation failed";
+                return (result != null && result.decompileCompleted())
+                    ? result.getDecompiledFunction().getC()
+                    : "Decompilation failed";
+            } finally {
+                decomp.dispose();
+            }
         } catch (Exception e) {
             return "Error decompiling function: " + e.getMessage();
         }
@@ -1205,11 +1217,16 @@ public class GhidraMCPPlugin extends Plugin {
     private DecompileResults decompileFunction(Function func, Program program) {
         // Set up decompiler for accessing the decompiled function
         DecompInterface decomp = new DecompInterface();
-        decomp.openProgram(program);
-        decomp.setSimplificationStyle("decompile"); // Full decompilation
+        DecompileResults results;
+        try {
+            decomp.openProgram(program);
+            decomp.setSimplificationStyle("decompile"); // Full decompilation
 
-        // Decompile the function
-        DecompileResults results = decomp.decompileFunction(func, 60, new ConsoleTaskMonitor());
+            // Decompile the function
+            results = decomp.decompileFunction(func, 60, new ConsoleTaskMonitor());
+        } finally {
+            decomp.dispose();
+        }
 
         if (!results.decompileCompleted()) {
             Msg.error(this, "Could not decompile function: " + results.getErrorMessage());
