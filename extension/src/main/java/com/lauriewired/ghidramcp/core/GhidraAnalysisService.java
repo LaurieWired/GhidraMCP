@@ -11,6 +11,7 @@ import java.util.function.Supplier;
 import com.lauriewired.ghidramcp.core.Model.*;
 
 import ghidra.app.cmd.function.ApplyFunctionSignatureCmd;
+import ghidra.app.cmd.function.FunctionRenameOption;
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileResults;
 import ghidra.app.services.DataTypeQueryService;
@@ -18,6 +19,7 @@ import ghidra.app.util.parser.FunctionSignatureParser;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressIterator;
 import ghidra.program.model.data.DataType;
+import ghidra.program.model.data.DataTypeConflictHandler;
 import ghidra.program.model.data.DataTypeManager;
 import ghidra.program.model.data.FunctionDefinitionDataType;
 import ghidra.program.model.data.PointerDataType;
@@ -589,7 +591,8 @@ public class GhidraAnalysisService {
 		}
 		return write(program, "Set function prototype", () -> {
 			ApplyFunctionSignatureCmd cmd = new ApplyFunctionSignatureCmd(f.getEntryPoint(),
-				signature, SourceType.USER_DEFINED);
+				signature, SourceType.USER_DEFINED, false, false,
+				DataTypeConflictHandler.DEFAULT_HANDLER, FunctionRenameOption.RENAME);
 			if (!cmd.applyTo(program, monitor)) {
 				throw McpException.failed("Could not apply prototype: " + cmd.getStatusMsg());
 			}

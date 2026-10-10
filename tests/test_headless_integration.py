@@ -160,6 +160,10 @@ def test_rename_and_annotate_round_trip(headless):
     proto = call(mcp, "set_function_prototype", function_address=fns["add_numbers"],
                  prototype="int add_numbers(int a, int b)")
     assert proto["signature"] == "int add_numbers(int a, int b)"
+    proto = call(mcp, "set_function_prototype", function_address=fns["add_numbers"],
+                 prototype="int add_ints(int a, int b)")
+    assert proto["function"]["name"] == "add_ints"
+    call(mcp, "rename_function_by_address", function_address=fns["add_numbers"], new_name="add_numbers")
 
     var = call(mcp, "rename_variable", function_address=fns["checksum"], old_name="param_1", new_name="buf")
     assert var["new_name"] == "buf"
