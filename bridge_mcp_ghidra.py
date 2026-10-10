@@ -15,6 +15,9 @@ from urllib.parse import urljoin
 from mcp.server.fastmcp import FastMCP
 
 DEFAULT_GHIDRA_SERVER = "http://127.0.0.1:8080/"
+# (connect, read) timeouts in seconds. The read timeout must outlast the
+# plugin's decompiler timeout (up to 60 s), or decompile-based tools fail early.
+REQUEST_TIMEOUT = (5, 90)
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +36,7 @@ def safe_get(endpoint: str, params: dict = None) -> list:
     url = urljoin(ghidra_server_url, endpoint)
 
     try:
-        response = requests.get(url, params=params, timeout=5)
+        response = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
         response.encoding = 'utf-8'
         if response.ok:
             return response.text.splitlines()
@@ -46,9 +49,9 @@ def safe_post(endpoint: str, data: dict | str) -> str:
     try:
         url = urljoin(ghidra_server_url, endpoint)
         if isinstance(data, dict):
-            response = requests.post(url, data=data, timeout=5)
+            response = requests.post(url, data=data, timeout=REQUEST_TIMEOUT)
         else:
-            response = requests.post(url, data=data.encode("utf-8"), timeout=5)
+            response = requests.post(url, data=data.encode("utf-8"), timeout=REQUEST_TIMEOUT)
         response.encoding = 'utf-8'
         if response.ok:
             return response.text.strip()
