@@ -74,7 +74,7 @@ For clients that connect to a URL instead of launching a command, first run the 
 uvx --from git+https://github.com/LaurieWired/GhidraMCP ghidra-mcp --transport streamable-http --mcp-host 127.0.0.1 --mcp-port 8081 --ghidra-server http://127.0.0.1:8080/
 ```
 
-Then add `http://127.0.0.1:8081/mcp` as a remote server in your client. (`--transport sse` with `http://127.0.0.1:8081/sse` still works but is deprecated.)
+Then add `http://127.0.0.1:8081/mcp` as a remote server in your client.
 
 ## Example 1: VS Code
 Run `MCP: Add Server` from the Command Palette, or add the following to `.vscode/mcp.json` in your workspace:
