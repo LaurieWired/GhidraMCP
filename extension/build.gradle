@@ -1,0 +1,33 @@
+// Builds the GhidraMCP Ghidra extension against a local Ghidra installation.
+//
+//     export GHIDRA_INSTALL_DIR=/path/to/ghidra_12.1.4_PUBLIC
+//     gradle
+//
+// The extension ZIP is written to dist/.
+
+def ghidraInstallDir
+
+if (System.env.GHIDRA_INSTALL_DIR) {
+	ghidraInstallDir = System.env.GHIDRA_INSTALL_DIR
+}
+else if (project.hasProperty("GHIDRA_INSTALL_DIR")) {
+	ghidraInstallDir = project.getProperty("GHIDRA_INSTALL_DIR")
+}
+else {
+	throw new GradleException("GHIDRA_INSTALL_DIR is not set (environment variable or -PGHIDRA_INSTALL_DIR)")
+}
+
+task distributeExtension {
+	group = "Ghidra"
+
+	apply from: new File(ghidraInstallDir).getCanonicalPath() + "/support/buildExtension.gradle"
+	dependsOn ':buildExtension'
+}
+
+repositories {
+}
+
+dependencies {
+}
+
+buildExtension.exclude '.idea/**'

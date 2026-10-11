@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ghidra-mcp"
+version = "2.0.0"
+description = "MCP server that exposes Ghidra reverse-engineering capabilities to LLM clients"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "LaurieWired" }]
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.30,<2",
+    "requests>=2.32,<3",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+    "Topic :: Software Development :: Disassemblers",
+]
+
+[project.optional-dependencies]
+headless = ["pyghidra>=3.1"]
+
+[project.scripts]
+ghidra-mcp = "ghidra_mcp.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/LaurieWired/GhidraMCP"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ghidra_mcp"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/ghidra_mcp", "tests", "README.md", "LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["ghidra: requires a Ghidra installation (GHIDRA_INSTALL_DIR)"]

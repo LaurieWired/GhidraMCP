@@ -1,4 +1,4 @@
-name: Build with Maven
+name: Build
 
 on:
   push:
@@ -10,52 +10,51 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      GHIDRA_VERSION: 12.1
-      GHIDRA_DATE: 20260513
-      GHIDRA_LIBS: >-
-        Features/Base/lib/Base.jar
-        Features/Decompiler/lib/Decompiler.jar
-        Framework/Docking/lib/Docking.jar
-        Framework/Generic/lib/Generic.jar
-        Framework/Project/lib/Project.jar
-        Framework/SoftwareModeling/lib/SoftwareModeling.jar
-        Framework/Utility/lib/Utility.jar
-        Framework/Gui/lib/Gui.jar
+      GHIDRA_VERSION: 12.1.4
+      GHIDRA_DATE: 20260921
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
+
     - name: Set up JDK 21
       uses: actions/setup-java@v5
       with:
         java-version: '21'
         distribution: 'temurin'
-        cache: maven
+
+    - name: Set up Gradle
+      uses: gradle/actions/setup-gradle@v4
+      with:
+        gradle-version: '8.14'
+
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v6
 
     - name: Download Ghidra
       run: |
-        wget --no-verbose -O ghidra.zip https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${{ env.GHIDRA_VERSION }}_build/ghidra_${{ env.GHIDRA_VERSION }}_PUBLIC_${{ env.GHIDRA_DATE }}.zip
+        wget --no-verbose -O ghidra.zip https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${GHIDRA_VERSION}_build/ghidra_${GHIDRA_VERSION}_PUBLIC_${GHIDRA_DATE}.zip
         7z x -bd ghidra.zip
+        echo "GHIDRA_INSTALL_DIR=$PWD/ghidra_${GHIDRA_VERSION}_PUBLIC" >> "$GITHUB_ENV"
 
-    - name: Copy Ghidra libs
-      run: |
-        mkdir -p ./lib
-        for libfile in ${{ env.GHIDRA_LIBS }}
-          do echo "Copying ${libfile} to lib/"
-          cp ghidra_${{ env.GHIDRA_VERSION }}_PUBLIC/Ghidra/${libfile} ./lib/
-        done
+    - name: Build Ghidra extension
+      working-directory: extension
+      run: gradle buildExtension
 
-    - name: Build with Maven
-      run: mvn clean package assembly:single
+    - name: Build Python package
+      run: uv build
+
+    - name: Python tests (including headless integration)
+      run: uv run --extra headless pytest -v
 
     - name: Assemble release directory
       run: |
         mkdir release
-        cp target/GhidraMCP-*-SNAPSHOT.zip release/
+        cp extension/dist/*.zip release/
+        cp dist/*.whl dist/*.tar.gz release/
         cp bridge_mcp_ghidra.py release/
 
     - name: Upload artifact
       uses: actions/upload-artifact@v7
       with:
         name: GhidraMCP-artifact
-        path: |
-          release/*
+        path: release/*
