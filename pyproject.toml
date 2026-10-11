@@ -37,7 +37,7 @@ dev = ["pytest>=8"]
 packages = ["src/ghidra_mcp"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/ghidra_mcp", "tests", "README.md", "LICENSE"]
+include = ["src/ghidra_mcp", "tests", "examples/research_imports.py", "README.md", "LICENSE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
