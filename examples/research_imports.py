@@ -64,7 +64,7 @@ async def run(args: argparse.Namespace) -> None:
     # Only explicit CLI inputs go to Parallel, never results from the local binary.
     session_id = str(uuid.uuid4())
     async with httpx.AsyncClient(
-        headers={"User-Agent": USER_AGENT}, timeout=90, trust_env=False,
+        headers={"User-Agent": USER_AGENT}, timeout=90,
     ) as http:
         async with streamable_http_client(PARALLEL_URL, http_client=http) as (read, write, _):
             async with ClientSession(read, write, read_timeout_seconds=CALL_TIMEOUT) as parallel:

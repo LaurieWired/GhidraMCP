@@ -61,7 +61,6 @@ def mock_parallel(example, monkeypatch, *, search_error=False, fetch_error=False
     real_client = httpx.AsyncClient
 
     def client(**kwargs):
-        assert kwargs["trust_env"] is False
         return real_client(transport=httpx.MockTransport(handle), **kwargs)
 
     monkeypatch.setattr(example.httpx, "AsyncClient", client)
@@ -70,6 +69,7 @@ def mock_parallel(example, monkeypatch, *, search_error=False, fetch_error=False
 
 def test_real_sessions_keep_local_results_out_of_remote_requests(example, fake_backend, monkeypatch, capsys):
     configure_ghidra(fake_backend)
+    monkeypatch.setenv("PARALLEL_API_KEY", "unused-test-key")
     requests = mock_parallel(example, monkeypatch)
     args = example.build_parser().parse_args([
         "--ghidra-server", fake_backend.url, "--offset", "100",
