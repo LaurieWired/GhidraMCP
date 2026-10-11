@@ -23,12 +23,12 @@ jobs:
         distribution: 'temurin'
 
     - name: Set up Gradle
-      uses: gradle/actions/setup-gradle@v4
+      uses: gradle/actions/setup-gradle@v6
       with:
         gradle-version: '8.14'
 
     - name: Set up uv
-      uses: astral-sh/setup-uv@v6
+      uses: astral-sh/setup-uv@v10
 
     - name: Download Ghidra
       run: |
