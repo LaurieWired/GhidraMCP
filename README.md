@@ -104,6 +104,34 @@ Run the following command:
 claude mcp add ghidra -- uvx --from git+https://github.com/LaurieWired/GhidraMCP ghidra-mcp --ghidra-server http://127.0.0.1:8080/
 ```
 
+## Example 3: Research imported APIs
+
+The optional [Python MCP client example](examples/research_imports.py) pairs local
+Ghidra import listings with public API documentation from
+[Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp).
+Search uses Fast mode and is free for light use, with no account or API key.
+It makes direct tool calls and prints JSON lines containing the program, one page
+of imports, and any requested search/fetch results, including source URLs.
+
+With a binary open in Ghidra and the plugin enabled, run from a checkout:
+
+```sh
+uv run examples/research_imports.py
+```
+
+Then choose a public API from the listing and supply a documentation query:
+
+```sh
+uv run examples/research_imports.py --query "POSIX fopen mode documentation"
+```
+
+To read a particular documentation page, add
+`--fetch-url https://man7.org/linux/man-pages/man3/fopen.3.html`.
+Use `--offset 100` for the next import page or `--ghidra-server URL` for another
+Ghidra instance. `uv` installs the example's declared dependencies automatically.
+Only the queries and URL you supply are sent to Parallel; local tool results stay
+local. Without either option, the example only lists the program and imports.
+
 ## Headless (no Ghidra GUI)
 `ghidra-mcp` can also import and analyze a binary itself using [PyGhidra](https://pypi.org/project/pyghidra/), with no Ghidra GUI running. This needs Python 3.10–3.13, the GhidraMCP extension installed in Ghidra (or `--extension-jar /path/to/GhidraMCP.jar`), and `GHIDRA_INSTALL_DIR` set to your Ghidra 12.1.4 directory:
 
