@@ -47,6 +47,8 @@ https://github.com/user-attachments/assets/75f0c176-6da1-48dc-ad96-c182eb4648c3
 
 ## MCP Clients
 
+The MCP server is the `ghidra-mcp` command, which `uvx` downloads and runs for you (this needs [uv](https://docs.astral.sh/uv/) installed). There is no separate bridge script to download, and the `.whl` and `.tar.gz` files in the release are not needed for the config below. Older versions used `bridge_mcp_ghidra.py`, which is no longer required.
+
 Theoretically, any MCP client should work with ghidraMCP. Most clients accept a JSON config like the following:
 
 ```json
