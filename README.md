@@ -113,6 +113,12 @@ uvx --python 3.13 --from "ghidra-mcp[headless] @ git+https://github.com/LaurieWi
 
 Use the same command and arguments in any of the client configs above. Add `--project DIR` to keep the Ghidra project (and save changes) between runs. On macOS, build Ghidra's decompiler once with `support/gradle/gradlew buildNatives` from the Ghidra directory.
 
+## Example 4: Claude CLI
+To add the MCP server to Claude CLI, use the following command:
+```bash
+ claude mcp add ghidra "python3" "ABSOLUTE_PATH_TO/bridge_mcp_ghidra.py" "--ghidra-server" "http://localhost:8080"
+```
+
 # Building from Source
 1. Set `GHIDRA_INSTALL_DIR` to your Ghidra 12.1.4 directory
 2. Build the extension with Gradle (Java 21) by running:
