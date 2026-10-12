@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "ghidra": {
+      "command": "python",
+      "args": [
+        "bridge_mcp_ghidra.py"
+      ]
+    }
+  }
+}
