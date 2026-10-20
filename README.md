@@ -25,7 +25,7 @@ MCP Server + Ghidra Plugin
 
 ## Prerequisites
 - Install [Ghidra](https://ghidra-sre.org) 12.1.4
-- Install [uv](https://docs.astral.sh/uv/) (or Python 3.10+ with `pip install git+https://github.com/LaurieWired/GhidraMCP`, then use `ghidra-mcp` as the command below)
+- Install [uv](https://docs.astral.sh/uv/) (or Python 3.10+ with `pip install git+https://github.com/LaurieWired/GhidraMCP@2.0`, then use `ghidra-mcp` as the command below)
 
 ## Ghidra
 First, download the latest [release](https://github.com/LaurieWired/GhidraMCP/releases) from this repository. This contains the Ghidra plugin and Python MCP client. Then, you can directly import the plugin into Ghidra.
@@ -56,7 +56,7 @@ Theoretically, any MCP client should work with ghidraMCP. Most clients accept a 
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/LaurieWired/GhidraMCP",
+        "git+https://github.com/LaurieWired/GhidraMCP@2.0",
         "ghidra-mcp",
         "--ghidra-server",
         "http://127.0.0.1:8080/"
@@ -71,7 +71,7 @@ The server IP and port are configurable and should be set to point to the target
 For clients that connect to a URL instead of launching a command, first run the MCP server yourself:
 
 ```
-uvx --from git+https://github.com/LaurieWired/GhidraMCP ghidra-mcp --transport streamable-http --mcp-host 127.0.0.1 --mcp-port 8081 --ghidra-server http://127.0.0.1:8080/
+uvx --from git+https://github.com/LaurieWired/GhidraMCP@2.0 ghidra-mcp --transport streamable-http --mcp-host 127.0.0.1 --mcp-port 8081 --ghidra-server http://127.0.0.1:8080/
 ```
 
 Then add `http://127.0.0.1:8081/mcp` as a remote server in your client.
@@ -87,7 +87,7 @@ Run `MCP: Add Server` from the Command Palette, or add the following to `.vscode
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/LaurieWired/GhidraMCP",
+        "git+https://github.com/LaurieWired/GhidraMCP@2.0",
         "ghidra-mcp",
         "--ghidra-server",
         "http://127.0.0.1:8080/"
@@ -101,14 +101,14 @@ Run `MCP: Add Server` from the Command Palette, or add the following to `.vscode
 Run the following command:
 
 ```
-claude mcp add ghidra -- uvx --from git+https://github.com/LaurieWired/GhidraMCP ghidra-mcp --ghidra-server http://127.0.0.1:8080/
+claude mcp add ghidra -- uvx --from git+https://github.com/LaurieWired/GhidraMCP@2.0 ghidra-mcp --ghidra-server http://127.0.0.1:8080/
 ```
 
 ## Headless (no Ghidra GUI)
 `ghidra-mcp` can also import and analyze a binary itself using [PyGhidra](https://pypi.org/project/pyghidra/), with no Ghidra GUI running. This needs Python 3.10–3.13, the GhidraMCP extension installed in Ghidra (or `--extension-jar /path/to/GhidraMCP.jar`), and `GHIDRA_INSTALL_DIR` set to your Ghidra 12.1.4 directory:
 
 ```
-uvx --python 3.13 --from "ghidra-mcp[headless] @ git+https://github.com/LaurieWired/GhidraMCP" ghidra-mcp --headless --binary /path/to/target
+uvx --python 3.13 --from "ghidra-mcp[headless] @ git+https://github.com/LaurieWired/GhidraMCP@2.0" ghidra-mcp --headless --binary /path/to/target
 ```
 
 Use the same command and arguments in any of the client configs above. Add `--project DIR` to keep the Ghidra project (and save changes) between runs. On macOS, build Ghidra's decompiler once with `support/gradle/gradlew buildNatives` from the Ghidra directory.
