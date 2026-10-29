@@ -113,6 +113,25 @@ uvx --python 3.13 --from "ghidra-mcp[headless] @ git+https://github.com/LaurieWi
 
 Use the same command and arguments in any of the client configs above. Add `--project DIR` to keep the Ghidra project (and save changes) between runs. On macOS, build Ghidra's decompiler once with `support/gradle/gradlew buildNatives` from the Ghidra directory.
 
+## Read-only MCP sessions
+
+Add `--read-only` to any server command above to expose only analysis tools,
+in GUI or headless mode. For example:
+
+```sh
+uvx --from git+https://github.com/LaurieWired/GhidraMCP ghidra-mcp --read-only --ghidra-server http://127.0.0.1:8080/
+```
+
+The eight rename/type/prototype/comment tools are omitted from `tools/list`.
+Calls to their names are rejected as unknown tools before reaching the backend,
+even if a client cached a writable tool list. The default remains writable.
+
+This restricts tool calls through this MCP server, not the Ghidra GUI or direct
+access to the Java backend. It does not mount the binary/project read-only,
+prevent auto-analysis or project saves, or make model analysis immune to prompt
+injection. Decompiled code, strings and symbol names remain untrusted evidence;
+read-only mode leaves that evidence intact.
+
 # Building from Source
 1. Set `GHIDRA_INSTALL_DIR` to your Ghidra 12.1.4 directory
 2. Build the extension with Gradle (Java 21) by running:

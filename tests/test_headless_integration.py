@@ -201,7 +201,8 @@ def test_backend_rejects_browser_and_rebinding_requests(headless):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="stdio subprocess test uses POSIX paths")
-def test_cli_stdio_session():
+@pytest.mark.parametrize("read_only", [False, True])
+def test_cli_stdio_session(read_only):
     """The real `ghidra-mcp --headless` command over MCP stdio, in a separate process."""
     pytest.importorskip("pyghidra")
     script = f"""
@@ -211,14 +212,19 @@ from mcp.client.stdio import stdio_client
 
 async def main():
     params = StdioServerParameters(command=sys.executable, args=[
-        "-m", "ghidra_mcp", "--headless", "--binary", {str(FIXTURES / BINARIES["elf"])!r},
-        "--ghidra-install-dir", {GHIDRA!r}, "--extension-jar", {str(JAR)!r}, "--ready-timeout", "300"])
+        "-m", "ghidra_mcp", *{["--read-only"] if read_only else []!r}, "--headless", "--binary", {str(FIXTURES / BINARIES["elf"])!r},
+        "--ghidra-install-dir", {GHIDRA!r}, "--extension-jar", {str(JAR)!r}, "--ready-timeout", "300"],
+        env={{"PYTHONPATH": {str(ROOT / "src")!r}}})
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as s:
             await s.initialize()
             names = sorted(t.name for t in (await s.list_tools()).tools)
             info = await s.call_tool("get_program_info", {{}})
-            print(json.dumps({{"tools": names, "error": info.isError, "info": info.content[0].text}}))
+            blocked = None
+            if {read_only!r}:
+                attempt = await s.call_tool("rename_function", {{"old_name": "main", "new_name": "renamed"}})
+                blocked = attempt.isError and "Unknown tool" in attempt.content[0].text
+            print(json.dumps({{"tools": names, "error": info.isError, "info": info.content[0].text, "blocked": blocked}}))
 
 asyncio.run(main())
 """
@@ -228,3 +234,9 @@ asyncio.run(main())
     assert "get_current_address" not in result["tools"]
     assert not result["error"], result["info"]
     assert json.loads(result["info"])["name"] == BINARIES["elf"]
+
+    if read_only:
+        assert "rename_function" not in result["tools"]
+        assert result["blocked"] is True
+    else:
+        assert "rename_function" in result["tools"]

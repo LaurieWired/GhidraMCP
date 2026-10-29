@@ -57,6 +57,12 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Backend read timeout in seconds (default: {DEFAULT_READ_TIMEOUT})",
     )
 
+    parser.add_argument(
+        "--read-only",
+        action="store_true",
+        help="Expose analysis tools only; reject modification tool calls in this MCP server",
+    )
+
     headless = parser.add_argument_group(
         "headless mode", "Run Ghidra in-process via PyGhidra instead of connecting to the GUI"
     )
@@ -146,7 +152,7 @@ def run_gui(args: argparse.Namespace) -> None:
             program,
         )
         capabilities = set(health.get("capabilities", []))
-    mcp = create_server(backend, args.mcp_host, args.mcp_port, capabilities)
+    mcp = create_server(backend, args.mcp_host, args.mcp_port, capabilities, read_only=args.read_only)
     serve(mcp, args)
 
 
@@ -175,7 +181,7 @@ def run_headless(args: argparse.Namespace) -> None:
         logger.error("%s", e)
         sys.exit(1)
 
-    mcp = create_server(backend, args.mcp_host, args.mcp_port, capabilities=set())
+    mcp = create_server(backend, args.mcp_host, args.mcp_port, capabilities=set(), read_only=args.read_only)
 
     def serve_then_stop() -> None:
         try:
