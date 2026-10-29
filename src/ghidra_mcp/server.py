@@ -28,11 +28,14 @@ def create_server(
     host: str = "127.0.0.1",
     port: int = 8081,
     capabilities: set[str] | None = None,
+    *,
+    read_only: bool = False,
 ) -> FastMCP:
     """Builds the MCP server.
 
     `capabilities` comes from the backend's /health. When it is None (backend not reachable at
-    startup) every tool is registered.
+    startup) every tool allowed by the session policy is registered.
+    `read_only` omits all modification tools, including when capabilities are unknown.
     """
     mcp = FastMCP("ghidra-mcp", instructions=INSTRUCTIONS, host=host, port=port)
     gui_context = capabilities is None or CAP_GUI_CONTEXT in capabilities
@@ -193,6 +196,10 @@ def create_server(
         """Read up to 4096 bytes of program memory as hex and ASCII. Unmapped or uninitialized
         bytes are shown as '??' and listed in `gaps`."""
         return get("read_memory", address=address, length=length)
+
+    # Unknown/hidden tool names are rejected by FastMCP before any backend request.
+    if read_only:
+        return mcp
 
     # ---- Modifications ---------------------------------------------------------------------
 
