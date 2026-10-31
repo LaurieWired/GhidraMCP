@@ -58,3 +58,41 @@ def test_rename_variable_requires_function_identity():
     mcp = create_server(GhidraBackend("http://127.0.0.1:1/"))
     with pytest.raises(ToolError, match="MISSING_PARAMETER"):
         asyncio.run(mcp.call_tool("rename_variable", {"old_name": "a", "new_name": "b"}))
+
+
+def test_struct_fields_are_sent_as_json(fake_backend):
+    fake_backend.ok("/create_struct", {"action": "created", "data_type": {}})
+    mcp = create_server(GhidraBackend(fake_backend.url))
+    call(mcp, "create_struct", name="hdr", size=16, fields=[
+        {"type": "uint", "name": "magic", "offset": 0},
+        {"type": "hdr *"},
+    ])
+    params = fake_backend.requests[-1][2]
+    assert json.loads(params["fields"]) == [{"type": "uint", "name": "magic", "offset": 0},
+                                            {"type": "hdr *"}]
+    assert params["on_conflict"] == "error"
+    assert params["packing_enabled"] == "False"
+
+
+def test_enum_values_are_sent_as_json(fake_backend):
+    fake_backend.ok("/create_enum", {"action": "created", "data_type": {}})
+    mcp = create_server(GhidraBackend(fake_backend.url))
+    call(mcp, "create_enum", name="color", values={"RED": 0, "GREEN": 5}, size=1)
+    params = fake_backend.requests[-1][2]
+    assert json.loads(params["values"]) == {"RED": 0, "GREEN": 5}
+    assert params["size"] == "1"
+
+
+def test_invalid_on_conflict_is_rejected():
+    mcp = create_server(GhidraBackend("http://127.0.0.1:1/"))
+    with pytest.raises(ToolError):
+        asyncio.run(mcp.call_tool("define_c_types", {"source": "struct a { int x; };",
+                                                     "on_conflict": "overwrite"}))
+
+
+def test_struct_field_edits_require_field_identity():
+    mcp = create_server(GhidraBackend("http://127.0.0.1:1/"))
+    with pytest.raises(ToolError, match="MISSING_PARAMETER"):
+        asyncio.run(mcp.call_tool("update_struct_field", {"name": "a", "new_name": "b"}))
+    with pytest.raises(ToolError, match="MISSING_PARAMETER"):
+        asyncio.run(mcp.call_tool("delete_struct_field", {"name": "a"}))

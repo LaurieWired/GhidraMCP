@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
+from pydantic import BaseModel, Field
 
 from ghidra_mcp.backend import BackendError, GhidraBackend
 
@@ -17,10 +19,35 @@ INSTRUCTIONS = """\
 Tools for reverse engineering the program open in Ghidra. Call get_program_info first to confirm
 which binary you are working on. Addresses are hex strings such as "0x401000". List tools are
 paginated: pass offset/limit and check has_more. Prefer the address-based tools for modifications,
-since function names can be ambiguous.
+since function names can be ambiguous. To define structs, unions, enums, and typedefs prefer
+define_c_types with plain C (no #include or #define); inspect types with get_data_type and use them
+with apply_data_type, set_local_variable_type, or set_function_prototype.
 """
 
 Result = dict[str, Any]
+
+OnConflict = Literal["error", "replace", "keep"]
+
+
+class StructField(BaseModel):
+    """A struct or union field."""
+
+    type: str = Field(description='Field type, e.g. "int", "char[16]", "struct node *".')
+    name: str | None = Field(None, description="Field name; omit for Ghidra's default name.")
+    offset: int | None = Field(
+        None, description="Byte offset in a non-packed struct; omit to append after the last field."
+    )
+    comment: str | None = None
+    bit_size: int | None = Field(None, description="Make this a bit field of this many bits.")
+    bit_offset: int | None = Field(
+        None, description="Bit offset within the storage unit at `offset` (non-packed structs)."
+    )
+
+
+def _fields_json(fields: list[StructField] | None) -> str | None:
+    if fields is None:
+        return None
+    return json.dumps([f.model_dump(exclude_none=True) for f in fields])
 
 
 def create_server(
@@ -259,5 +286,200 @@ def create_server(
         """Set the end-of-line comment at an address (shown in the disassembly). An empty comment
         clears it."""
         return post("set_disassembly_comment", address=address, comment=comment)
+
+    # ---- Data types ------------------------------------------------------------------------
+
+    @mcp.tool()
+    def list_data_types(
+        filter: str | None = None,
+        category: str | None = None,
+        kind: Literal["struct", "union", "enum", "typedef", "function", "pointer", "array",
+                      "builtin", "other"] | None = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> Result:
+        """List data types (name, path, kind, size), optionally filtered by a case-insensitive
+        name substring, a category such as "/ghidra-mcp", and kind. Pointers and arrays are only
+        listed when kind asks for them."""
+        return get("data_types", filter=filter, category=category, kind=kind, offset=offset,
+                   limit=limit)
+
+    @mcp.tool()
+    def get_data_type(name: str) -> Result:
+        """Get a data type's full definition: fields with offsets for structs and unions, values
+        for enums, the base type of typedefs, and a C declaration. `name` may be a C type name or
+        a full path such as "/ghidra-mcp/foo"."""
+        return get("data_type", name=name)
+
+    @mcp.tool()
+    def list_data_type_categories(offset: int = 0, limit: int = 200) -> Result:
+        """List data type category paths."""
+        return get("data_type_categories", offset=offset, limit=limit)
+
+    @mcp.tool()
+    def define_c_types(
+        source: str, category: str | None = None, on_conflict: OnConflict = "error"
+    ) -> Result:
+        """Define data types from C declarations: structs, unions, enums, typedefs, and function
+        pointer types, e.g. "struct node { int value; struct node *next; };". Declarations may use
+        types that already exist in the program. The preprocessor is not run, so #include and
+        #define are not allowed. Types go into `category` (default "/ghidra-mcp"). on_conflict
+        decides what happens when a type of the same name already exists there."""
+        return post("define_c_types", source=source, category=category, on_conflict=on_conflict)
+
+    @mcp.tool()
+    def create_struct(
+        name: str,
+        fields: list[StructField] | None = None,
+        size: int | None = None,
+        packing_enabled: bool = False,
+        category: str | None = None,
+        description: str | None = None,
+        on_conflict: OnConflict = "error",
+    ) -> Result:
+        """Create a struct. With packing_enabled=false (the default) fields are placed exactly at
+        their byte offsets and gaps stay undefined; `size` pre-sizes the struct, which is useful
+        when only some fields are known. With packing_enabled=true Ghidra lays fields out using
+        the compiler's alignment rules and offsets must be omitted. Fields may refer to the struct
+        itself, e.g. "name *"."""
+        return post(
+            "create_struct",
+            name=name,
+            fields=_fields_json(fields),
+            size=size,
+            packing_enabled=packing_enabled,
+            category=category,
+            description=description,
+            on_conflict=on_conflict,
+        )
+
+    @mcp.tool()
+    def create_union(
+        name: str,
+        fields: list[StructField],
+        category: str | None = None,
+        description: str | None = None,
+        on_conflict: OnConflict = "error",
+    ) -> Result:
+        """Create a union. Field offsets must be omitted."""
+        return post(
+            "create_union",
+            name=name,
+            fields=_fields_json(fields),
+            category=category,
+            description=description,
+            on_conflict=on_conflict,
+        )
+
+    @mcp.tool()
+    def create_enum(
+        name: str,
+        values: dict[str, int],
+        size: Literal[1, 2, 4, 8] = 4,
+        category: str | None = None,
+        description: str | None = None,
+        on_conflict: OnConflict = "error",
+    ) -> Result:
+        """Create an enum from a mapping of names to values, e.g. {"RED": 0, "GREEN": 1}. `size`
+        is the enum's size in bytes."""
+        return post(
+            "create_enum",
+            name=name,
+            values=json.dumps(values),
+            size=size,
+            category=category,
+            description=description,
+            on_conflict=on_conflict,
+        )
+
+    @mcp.tool()
+    def create_typedef(
+        name: str, base_type: str, category: str | None = None, on_conflict: OnConflict = "error"
+    ) -> Result:
+        """Create a typedef, e.g. name="HANDLE_T", base_type="void *"."""
+        return post("create_typedef", name=name, base_type=base_type, category=category,
+                    on_conflict=on_conflict)
+
+    @mcp.tool()
+    def create_function_definition(
+        prototype: str, category: str | None = None, on_conflict: OnConflict = "error"
+    ) -> Result:
+        """Create a function signature type from a C prototype, e.g. "int callback(void *ctx)".
+        Use a pointer to it ("callback *") as a struct field or variable type."""
+        return post("create_function_definition", prototype=prototype, category=category,
+                    on_conflict=on_conflict)
+
+    @mcp.tool()
+    def add_struct_field(name: str, field: StructField) -> Result:
+        """Add a field to an existing struct or union. In a non-packed struct, a field with an
+        offset replaces undefined bytes there (growing the struct if needed); without an offset it
+        is appended."""
+        return post(
+            "add_struct_field", name=name, field=json.dumps(field.model_dump(exclude_none=True))
+        )
+
+    @mcp.tool()
+    def update_struct_field(
+        name: str,
+        field_name: str | None = None,
+        offset: int | None = None,
+        new_name: str | None = None,
+        new_type: str | None = None,
+        comment: str | None = None,
+    ) -> Result:
+        """Rename, retype, or comment a struct or union field, identified by field_name or by its
+        byte offset (structs only). A larger new type must fit into the undefined bytes after the
+        field. An empty comment clears it."""
+        if not field_name and offset is None:
+            raise ToolError("[MISSING_PARAMETER] field_name or offset is required")
+        return post(
+            "update_struct_field",
+            name=name,
+            field_name=field_name,
+            offset=offset,
+            new_name=new_name,
+            new_type=new_type,
+            comment=comment,
+        )
+
+    @mcp.tool()
+    def delete_struct_field(
+        name: str, field_name: str | None = None, offset: int | None = None
+    ) -> Result:
+        """Delete a struct or union field, identified by field_name or by byte offset. In a
+        non-packed struct the field's bytes become undefined and later fields keep their
+        offsets."""
+        if not field_name and offset is None:
+            raise ToolError("[MISSING_PARAMETER] field_name or offset is required")
+        return post("delete_struct_field", name=name, field_name=field_name, offset=offset)
+
+    @mcp.tool()
+    def set_enum_value(
+        name: str, value_name: str, value: int, comment: str | None = None
+    ) -> Result:
+        """Add a value to an enum, or change an existing one."""
+        return post("set_enum_value", name=name, value_name=value_name, value=value,
+                    comment=comment)
+
+    @mcp.tool()
+    def delete_enum_value(name: str, value_name: str) -> Result:
+        """Remove a value from an enum."""
+        return post("delete_enum_value", name=name, value_name=value_name)
+
+    @mcp.tool()
+    def rename_data_type(name: str, new_name: str) -> Result:
+        """Rename a data type. Uses of it are updated."""
+        return post("rename_data_type", name=name, new_name=new_name)
+
+    @mcp.tool()
+    def delete_data_type(name: str) -> Result:
+        """Delete a data type. Data, variables, and fields that used it become undefined."""
+        return post("delete_data_type", name=name)
+
+    @mcp.tool()
+    def apply_data_type(address: str, type: str, clear_existing: bool = False) -> Result:
+        """Define data of a type at an address, e.g. lay a struct over a global or vtable. Fails
+        if other data is in the way unless clear_existing is true."""
+        return post("apply_data_type", address=address, type=type, clear_existing=clear_existing)
 
     return mcp
