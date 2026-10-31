@@ -1,11 +1,13 @@
 package com.lauriewired.ghidramcp.http;
 
 import java.io.IOException;
+import java.lang.reflect.Type;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 
+import com.google.gson.JsonParseException;
 import com.lauriewired.ghidramcp.core.McpException;
 import com.sun.net.httpserver.HttpExchange;
 
@@ -77,6 +79,49 @@ public final class Request {
 		}
 		catch (NumberFormatException e) {
 			throw McpException.invalidParameter(name + " must be an integer (got '" + value + "')");
+		}
+	}
+
+	/** An optional integer parameter, or null if absent. */
+	public Integer optionalInt(String name) {
+		String value = params.get(name);
+		return value == null || value.isEmpty() ? null : intParam(name, 0);
+	}
+
+	public long requiredLong(String name) {
+		String value = required(name);
+		try {
+			return Long.decode(value.trim());
+		}
+		catch (NumberFormatException e) {
+			throw McpException.invalidParameter(name + " must be an integer (got '" + value + "')");
+		}
+	}
+
+	public boolean bool(String name, boolean defaultValue) {
+		String value = params.get(name);
+		if (value == null || value.isEmpty()) {
+			return defaultValue;
+		}
+		return switch (value.trim().toLowerCase()) {
+			case "true", "1", "yes" -> true;
+			case "false", "0", "no" -> false;
+			default -> throw McpException.invalidParameter(
+				name + " must be true or false (got '" + value + "')");
+		};
+	}
+
+	/** An optional JSON-encoded parameter, or null if absent. */
+	public <T> T json(String name, Type type) {
+		String value = params.get(name);
+		if (value == null || value.isEmpty()) {
+			return null;
+		}
+		try {
+			return Json.fromJson(value, type);
+		}
+		catch (JsonParseException e) {
+			throw McpException.invalidParameter(name + " is not valid JSON: " + e.getMessage());
 		}
 	}
 

@@ -1,5 +1,6 @@
 package com.lauriewired.ghidramcp.http;
 
+import java.lang.reflect.Type;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -20,6 +21,11 @@ public final class Json {
 			.create();
 
 	private Json() {
+	}
+
+	/** Parses JSON using the same snake_case field naming as responses. */
+	public static <T> T fromJson(String json, Type type) {
+		return GSON.fromJson(json, type);
 	}
 
 	public static String success(Object data) {

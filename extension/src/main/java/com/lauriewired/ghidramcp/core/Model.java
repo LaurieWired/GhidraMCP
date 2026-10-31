@@ -82,4 +82,38 @@ public final class Model {
 	public record VariableTypeSet(FunctionRef function, String variable, String oldType,
 			String newType) {
 	}
+
+	public record DataTypeRef(String name, String path, String kind, int size) {
+	}
+
+	public record FieldInfo(int ordinal, int offset, int length, String name, String type,
+			String comment, Integer bitSize, Integer bitOffset) {
+	}
+
+	public record EnumValue(String name, long value, String comment) {
+	}
+
+	public record DataTypeInfo(String name, String path, String kind, int size, int alignment,
+			Boolean packingEnabled, String description, List<FieldInfo> fields,
+			List<EnumValue> values, String baseType, String prototype, String cDeclaration,
+			boolean truncated) {
+	}
+
+	public record DataTypeWritten(String action, DataTypeInfo dataType) {
+	}
+
+	public record DataTypesDefined(List<DataTypeRef> created, List<DataTypeRef> replaced,
+			List<DataTypeRef> kept) {
+	}
+
+	public record DataTypeRenamed(String oldPath, DataTypeRef dataType) {
+	}
+
+	public record DataApplied(String address, String type, int length, String label) {
+	}
+
+	/** A struct or union field as supplied by the client. */
+	public record FieldSpec(String name, String type, Integer offset, String comment,
+			Integer bitSize, Integer bitOffset) {
+	}
 }

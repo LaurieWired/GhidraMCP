@@ -20,6 +20,7 @@ MCP Server + Ghidra Plugin
 - Decompile and analyze binaries in Ghidra
 - Automatically rename methods and data
 - List methods, classes, imports, and exports
+- Define custom structs, unions, enums, typedefs, and function types (from C declarations or field by field), edit them, and apply them to memory, variables, and function signatures
 
 # Installation
 

@@ -5,15 +5,20 @@ import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.lang.reflect.Type;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import com.google.gson.reflect.TypeToken;
+import com.lauriewired.ghidramcp.core.DataTypeOperations;
 import com.lauriewired.ghidramcp.core.GhidraAnalysisService;
 import com.lauriewired.ghidramcp.core.McpException;
+import com.lauriewired.ghidramcp.core.Model.FieldSpec;
 import com.lauriewired.ghidramcp.core.ProgramProvider;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -31,9 +36,12 @@ import ghidra.util.task.TaskMonitor;
  */
 public final class BackendHttpServer {
 
-	public static final String VERSION = "2.0.0";
+	public static final String VERSION = "2.1.0";
 
 	private static final Set<String> ALLOWED_HOSTS = Set.of("127.0.0.1", "localhost", "[::1]");
+
+	private static final Type FIELD_LIST = new TypeToken<List<FieldSpec>>() {}.getType();
+	private static final Type ENUM_VALUES = new TypeToken<LinkedHashMap<String, Long>>() {}.getType();
 
 	@FunctionalInterface
 	private interface Handler {
@@ -45,6 +53,7 @@ public final class BackendHttpServer {
 
 	private final ProgramProvider provider;
 	private final GhidraAnalysisService service;
+	private final DataTypeOperations dataTypes;
 	private final Map<String, Route> routes = new LinkedHashMap<>();
 	private HttpServer server;
 	private ExecutorService executor;
@@ -52,6 +61,7 @@ public final class BackendHttpServer {
 	public BackendHttpServer(ProgramProvider provider) {
 		this.provider = provider;
 		this.service = new GhidraAnalysisService(provider::runWrite);
+		this.dataTypes = new DataTypeOperations(provider::runWrite);
 		registerRoutes();
 	}
 
@@ -121,6 +131,26 @@ public final class BackendHttpServer {
 		post("/set_disassembly_comment", (q, p) -> service.setComment(p, q.required("address"), q.present("comment"), CommentType.EOL));
 		post("/set_function_prototype", (q, p) -> service.setFunctionPrototype(p, q.required("function_address"), q.required("prototype"), provider.getDataTypeService(), monitor));
 		post("/set_local_variable_type", (q, p) -> service.setLocalVariableType(p, q.required("function_address"), q.required("variable_name"), q.required("new_type"), monitor));
+
+		get("/data_types", (q, p) -> dataTypes.listDataTypes(p, q.optional("filter"), q.optional("category"), q.optional("kind"), q.offset(), q.limit(100)));
+		get("/data_type", (q, p) -> dataTypes.getDataType(p, q.required("name")));
+		get("/data_type_categories", (q, p) -> dataTypes.listCategories(p, q.offset(), q.limit(200)));
+
+		post("/define_c_types", (q, p) -> dataTypes.defineCTypes(p, q.required("source"), q.optional("category"), q.optional("on_conflict")));
+		post("/create_struct", (q, p) -> dataTypes.createStruct(p, q.required("name"), q.optional("category"), q.json("fields", FIELD_LIST), q.optionalInt("size"), q.bool("packing_enabled", false), q.optional("description"), q.optional("on_conflict")));
+		post("/create_union", (q, p) -> dataTypes.createUnion(p, q.required("name"), q.optional("category"), q.json("fields", FIELD_LIST), q.optional("description"), q.optional("on_conflict")));
+		post("/create_enum", (q, p) -> dataTypes.createEnum(p, q.required("name"), q.optional("category"), q.json("values", ENUM_VALUES), q.intParam("size", 4), q.optional("description"), q.optional("on_conflict")));
+		post("/create_typedef", (q, p) -> dataTypes.createTypedef(p, q.required("name"), q.required("base_type"), q.optional("category"), q.optional("on_conflict")));
+		post("/create_function_definition", (q, p) -> dataTypes.createFunctionDefinition(p, q.required("prototype"), q.optional("category"), q.optional("on_conflict"), provider.getDataTypeService()));
+
+		post("/add_struct_field", (q, p) -> dataTypes.addCompositeField(p, q.required("name"), q.json("field", FieldSpec.class)));
+		post("/update_struct_field", (q, p) -> dataTypes.updateCompositeField(p, q.required("name"), q.optionalInt("offset"), q.optional("field_name"), q.optional("new_name"), q.optional("new_type"), q.optional("comment")));
+		post("/delete_struct_field", (q, p) -> dataTypes.deleteCompositeField(p, q.required("name"), q.optionalInt("offset"), q.optional("field_name")));
+		post("/set_enum_value", (q, p) -> dataTypes.setEnumValue(p, q.required("name"), q.required("value_name"), q.requiredLong("value"), q.optional("comment")));
+		post("/delete_enum_value", (q, p) -> dataTypes.deleteEnumValue(p, q.required("name"), q.required("value_name")));
+		post("/rename_data_type", (q, p) -> dataTypes.renameDataType(p, q.required("name"), q.required("new_name")));
+		post("/delete_data_type", (q, p) -> dataTypes.deleteDataType(p, q.required("name")));
+		post("/apply_data_type", (q, p) -> dataTypes.applyDataType(p, q.required("address"), q.required("type"), q.bool("clear_existing", false)));
 	}
 
 	private void get(String path, Handler handler) {

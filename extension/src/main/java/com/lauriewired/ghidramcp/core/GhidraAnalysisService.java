@@ -7,6 +7,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.TreeSet;
 import java.util.function.Supplier;
+import java.util.regex.Pattern;
 
 import com.lauriewired.ghidramcp.core.Model.*;
 
@@ -36,8 +37,6 @@ import ghidra.program.model.pcode.LocalSymbolMap;
 import ghidra.program.model.symbol.*;
 import ghidra.util.data.DataTypeParser;
 import ghidra.util.data.DataTypeParser.AllowedDataTypes;
-import ghidra.util.exception.DuplicateNameException;
-import ghidra.util.exception.InvalidInputException;
 import ghidra.util.task.TaskMonitor;
 
 /**
@@ -58,14 +57,12 @@ public class GhidraAnalysisService {
 		Map.entry("unsigned int", "uint"), Map.entry("unsigned short", "ushort"),
 		Map.entry("unsigned char", "uchar"));
 
+	private static final Pattern TYPE_TAG = Pattern.compile("\\b(struct|union|enum)\\s+");
+	private static final Pattern POINTER_RETURN = Pattern.compile("\\*\\s*([A-Za-z_][\\w:]*\\s*\\()");
+
 	/** Runs an action on the thread program writes must use. */
 	public interface WriteExecutor {
 		<T> T execute(Supplier<T> action);
-	}
-
-	@FunctionalInterface
-	private interface WriteAction<T> {
-		T run() throws Exception;
 	}
 
 	@FunctionalInterface
@@ -73,10 +70,10 @@ public class GhidraAnalysisService {
 		T apply(DecompileResults results);
 	}
 
-	private final WriteExecutor writeExecutor;
+	private final Transactions transactions;
 
 	public GhidraAnalysisService(WriteExecutor writeExecutor) {
-		this.writeExecutor = writeExecutor;
+		this.transactions = new Transactions(writeExecutor);
 	}
 
 	// ------------------------------------------------------------------------------------------
@@ -475,7 +472,7 @@ public class GhidraAnalysisService {
 
 	private Renamed renameFunction(Program program, Function f, String newName) {
 		requireNonEmpty(newName, "new_name");
-		return write(program, "Rename function", () -> {
+		return transactions.write(program, "Rename function", () -> {
 			String old = f.getName();
 			f.setName(newName, SourceType.USER_DEFINED);
 			return new Renamed(str(f.getEntryPoint()), old, f.getName());
@@ -491,7 +488,7 @@ public class GhidraAnalysisService {
 		if (data == null && existing == null) {
 			throw McpException.notFound("No defined data or symbol at " + addr);
 		}
-		return write(program, "Rename data", () -> {
+		return transactions.write(program, "Rename data", () -> {
 			Symbol symbol = st.getPrimarySymbol(addr);
 			String old = symbol != null ? symbol.getName() : null;
 			if (symbol != null) {
@@ -529,7 +526,7 @@ public class GhidraAnalysisService {
 			}
 			HighSymbol symbol = target;
 			boolean fullCommit = checkFullCommit(symbol, hf);
-			return write(program, "Rename variable", () -> {
+			return transactions.write(program, "Rename variable", () -> {
 				if (fullCommit) {
 					HighFunctionDBUtil.commitParamsToDatabase(hf, false,
 						ReturnCommitOption.NO_COMMIT, f.getSignatureSource());
@@ -565,7 +562,7 @@ public class GhidraAnalysisService {
 			String oldType = target.getDataType() != null ? target.getDataType().getDisplayName()
 					: null;
 			boolean fullCommit = checkFullCommit(target, hf);
-			return write(program, "Set variable type", () -> {
+			return transactions.write(program, "Set variable type", () -> {
 				if (fullCommit) {
 					HighFunctionDBUtil.commitParamsToDatabase(hf, false,
 						ReturnCommitOption.NO_COMMIT, f.getSignatureSource());
@@ -583,13 +580,13 @@ public class GhidraAnalysisService {
 		FunctionDefinitionDataType signature;
 		try {
 			signature = new FunctionSignatureParser(program.getDataTypeManager(), dataTypeService)
-					.parse(f.getSignature(), prototype);
+					.parse(f.getSignature(), normalizePrototype(prototype));
 		}
 		catch (Exception e) {
 			throw McpException.invalidParameter(
 				"Could not parse prototype '" + prototype + "': " + e.getMessage());
 		}
-		return write(program, "Set function prototype", () -> {
+		return transactions.write(program, "Set function prototype", () -> {
 			ApplyFunctionSignatureCmd cmd = new ApplyFunctionSignatureCmd(f.getEntryPoint(),
 				signature, SourceType.USER_DEFINED, false, false,
 				DataTypeConflictHandler.DEFAULT_HANDLER, FunctionRenameOption.RENAME);
@@ -606,7 +603,7 @@ public class GhidraAnalysisService {
 			throw McpException.missingParameter("comment");
 		}
 		Address addr = parseAddress(program, address);
-		return write(program, "Set " + type.name().toLowerCase(Locale.ROOT) + " comment", () -> {
+		return transactions.write(program, "Set " + type.name().toLowerCase(Locale.ROOT) + " comment", () -> {
 			program.getListing().setComment(addr, type, comment.isEmpty() ? null : comment);
 			return new CommentSet(str(addr), type.name(),
 				program.getListing().getComment(type, addr));
@@ -681,33 +678,6 @@ public class GhidraAnalysisService {
 		return functionByName(program, name);
 	}
 
-	private <T> T write(Program program, String transactionName, WriteAction<T> action) {
-		return writeExecutor.execute(() -> {
-			int tx = program.startTransaction(transactionName);
-			boolean commit = false;
-			try {
-				T result = action.run();
-				commit = true;
-				return result;
-			}
-			catch (McpException e) {
-				throw e;
-			}
-			catch (DuplicateNameException e) {
-				throw McpException.conflict(e.getMessage());
-			}
-			catch (InvalidInputException e) {
-				throw McpException.invalidParameter(e.getMessage());
-			}
-			catch (Exception e) {
-				throw McpException.failed(transactionName + " failed: " + e.getMessage(), e);
-			}
-			finally {
-				program.endTransaction(tx, commit);
-			}
-		});
-	}
-
 	private static <T> T withDecompiler(Program program, Function f, TaskMonitor monitor,
 			DecompiledAction<T> action) {
 		DecompInterface decomp = new DecompInterface();
@@ -768,14 +738,18 @@ public class GhidraAnalysisService {
 	}
 
 	/**
-	 * Resolves C-style type names (including pointers and arrays), names from any category of the
-	 * program's data type manager, a few Windows aliases, and Windows "P" pointer typedef names.
+	 * Resolves C-style type names (including pointers and arrays), full category paths such as
+	 * "/ghidra-mcp/foo", names from any category of the program's data type manager, a few Windows
+	 * aliases, and Windows "P" pointer typedef names.
 	 */
 	public static DataType resolveDataType(Program program, String typeName) {
 		DataTypeManager dtm = program.getDataTypeManager();
-		String name = typeName.trim();
+		String name = stripTypeTags(typeName.trim());
 
-		DataType dt = parseDataType(dtm, name);
+		DataType dt = name.startsWith("/") ? dataTypeAtPath(dtm, name) : null;
+		if (dt == null) {
+			dt = parseDataType(dtm, name);
+		}
 		if (dt == null) {
 			dt = findByName(dtm, name);
 		}
@@ -797,6 +771,35 @@ public class GhidraAnalysisService {
 		return dt;
 	}
 
+	/**
+	 * Removes C "struct", "union", and "enum" keywords, which Ghidra's parsers do not accept in
+	 * front of type names.
+	 */
+	static String stripTypeTags(String text) {
+		return TYPE_TAG.matcher(text).replaceAll("");
+	}
+
+	/**
+	 * Rewrites a C prototype into the form Ghidra's signature parser accepts: no type tags, and a
+	 * space between a pointer return type and the function name ("char *f(" becomes "char * f(").
+	 */
+	static String normalizePrototype(String prototype) {
+		return POINTER_RETURN.matcher(stripTypeTags(prototype.trim())).replaceFirst("* $1");
+	}
+
+	/** Looks up a full category path, allowing trailing '*'s for pointers to it. */
+	private static DataType dataTypeAtPath(DataTypeManager dtm, String path) {
+		String base = path.replaceAll("[\\s*]+$", "");
+		DataType dt = dtm.getDataType(base);
+		if (dt == null) {
+			return null;
+		}
+		for (int i = 0; i < path.length() - path.replace("*", "").length(); i++) {
+			dt = new PointerDataType(dt, dtm);
+		}
+		return dt;
+	}
+
 	private static DataType parseDataType(DataTypeManager dtm, String name) {
 		try {
 			return new DataTypeParser(dtm, dtm, null, AllowedDataTypes.ALL).parse(name);
@@ -806,7 +809,7 @@ public class GhidraAnalysisService {
 		}
 	}
 
-	private static DataType findByName(DataTypeManager dtm, String name) {
+	static DataType findByName(DataTypeManager dtm, String name) {
 		DataType caseInsensitive = null;
 		Iterator<DataType> it = dtm.getAllDataTypes();
 		while (it.hasNext()) {
